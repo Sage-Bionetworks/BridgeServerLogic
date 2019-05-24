@@ -38,7 +38,7 @@ public class DynamoHealthDataRecord implements HealthDataRecord {
     private String phoneInfo;
     private String rawDataAttachmentId;
     private String schemaId;
-    private int schemaRevision;
+    private Integer schemaRevision;
     private String studyId;
     private LocalDate uploadDate;
     private String uploadId;
@@ -181,13 +181,13 @@ public class DynamoHealthDataRecord implements HealthDataRecord {
 
     /** {@inheritDoc} */
     @Override
-    public int getSchemaRevision() {
+    public Integer getSchemaRevision() {
         return schemaRevision;
     }
 
     /** @see #getSchemaRevision */
     @Override
-    public void setSchemaRevision(int schemaRevision) {
+    public void setSchemaRevision(Integer schemaRevision) {
         this.schemaRevision = schemaRevision;
     }
 

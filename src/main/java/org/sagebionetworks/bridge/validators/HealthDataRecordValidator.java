@@ -86,17 +86,17 @@ public class HealthDataRecordValidator implements Validator {
                 errors.rejectValue("metadata", Validate.WRONG_TYPE);
             }
 
-            // schema ID is non-null and non-empty
-            if (StringUtils.isBlank(record.getSchemaId())) {
-                errors.rejectValue("schemaId", Validate.CANNOT_BE_BLANK);
+            // If schema ID is specified, it can't be blank.
+            if (record.getSchemaId() != null && StringUtils.isBlank(record.getSchemaId())) {
+                errors.rejectValue("schemaId", "can't be blank if specified");
             }
 
-            // schema revision is positive
-            if (record.getSchemaRevision() <= 0) {
-                errors.rejectValue("schemaRevision", Validate.CANNOT_BE_ZERO_OR_NEGATIVE);
+            // If schema revision is specified, it can't be negative.
+            if (record.getSchemaRevision() != null && record.getSchemaRevision() <= 0) {
+                errors.rejectValue("schemaRevision", "can't be zero or negative");
             }
 
-            // schema ID is non-null and non-empty
+            // study ID is non-null and non-empty
             if (StringUtils.isBlank(record.getStudyId())) {
                 errors.rejectValue("studyId", Validate.CANNOT_BE_BLANK);
             }

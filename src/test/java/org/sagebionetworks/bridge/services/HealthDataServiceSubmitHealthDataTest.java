@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 
 import java.util.List;
@@ -30,7 +31,6 @@ import org.testng.annotations.Test;
 
 import org.sagebionetworks.bridge.TestConstants;
 import org.sagebionetworks.bridge.exceptions.BadRequestException;
-import org.sagebionetworks.bridge.exceptions.EntityNotFoundException;
 import org.sagebionetworks.bridge.exceptions.InvalidEntityException;
 import org.sagebionetworks.bridge.json.BridgeObjectMapper;
 import org.sagebionetworks.bridge.models.GuidCreatedOnVersionHolderImpl;
@@ -100,7 +100,7 @@ public class HealthDataServiceSubmitHealthDataTest {
         schema.setRevision(SCHEMA_REV);
 
         UploadSchemaService mockSchemaService = mock(UploadSchemaService.class);
-        when(mockSchemaService.getUploadSchemaByIdAndRev(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(
+        when(mockSchemaService.getUploadSchemaByIdAndRevNoThrow(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(
                 schema);
 
         // Mock survey service.
@@ -220,7 +220,7 @@ public class HealthDataServiceSubmitHealthDataTest {
         assertEquals(contextRecord.getAppVersion(), APP_VERSION);
         assertEquals(contextRecord.getPhoneInfo(), PHONE_INFO);
         assertEquals(contextRecord.getSchemaId(), SCHEMA_ID);
-        assertEquals(contextRecord.getSchemaRevision(), SCHEMA_REV);
+        assertEquals(contextRecord.getSchemaRevision().intValue(), SCHEMA_REV);
         assertEquals(contextRecord.getHealthCode(), HEALTH_CODE);
         assertEquals(contextRecord.getStudyId(), TestConstants.TEST_STUDY_IDENTIFIER);
         assertEquals(contextRecord.getUploadDate(), MOCK_NOW_DATE);
@@ -292,7 +292,7 @@ public class HealthDataServiceSubmitHealthDataTest {
         UploadValidationContext context = contextCaptor.getValue();
         HealthDataRecord contextRecord = context.getHealthDataRecord();
         assertEquals(contextRecord.getSchemaId(), SCHEMA_ID);
-        assertEquals(contextRecord.getSchemaRevision(), SCHEMA_REV);
+        assertEquals(contextRecord.getSchemaRevision().intValue(), SCHEMA_REV);
 
         // validate that our record was parsed correctly
         JsonNode recordData = contextRecord.getData();
@@ -313,18 +313,59 @@ public class HealthDataServiceSubmitHealthDataTest {
                 new GuidCreatedOnVersionHolderImpl(SURVEY_GUID, SURVEY_CREATED_ON_MILLIS), false, true);
     }
 
-    @Test(expectedExceptions = EntityNotFoundException.class)
+    @Test
+    public void schemaNotFound() throws Exception {
+        HealthDataSubmission.Builder submissionBuilder = makeValidBuilderWithoutSchemaOrSurvey()
+                .withSchemaId("missing-schema").withSchemaRevision(1);
+        testSchemaless(submissionBuilder);
+    }
+
+    @Test
     public void surveyWithoutSchema() throws Exception {
-        // Survey has no schema.
         survey.setSchemaRevision(null);
+        testSchemaless(makeValidBuilderWithSurvey());
+    }
 
-        // setup input
+    @Test
+    public void surveySchemaNotFound() throws Exception {
+        survey.setIdentifier("missing-schema");
+        testSchemaless(makeValidBuilderWithSurvey());
+    }
+
+    @Test
+    public void schemaless() throws Exception {
+        testSchemaless(makeValidBuilderWithoutSchemaOrSurvey());
+    }
+
+    private void testSchemaless(HealthDataSubmission.Builder submissionBuilder) throws Exception {
+        // Set up input.
         ObjectNode inputData = BridgeObjectMapper.get().createObjectNode();
-        inputData.put("answer-me", "C");
-        HealthDataSubmission submission = makeValidBuilderWithSurvey().withData(inputData).build();
+        inputData.put("foo", "bar");
+        HealthDataSubmission submission = submissionBuilder.withData(inputData).build();
 
-        // execute
+        // Execute.
         svc.submitHealthData(TestConstants.TEST_STUDY, PARTICIPANT, submission);
+
+        // Everything else is covered by previous tests. Just verify that the data is submitted, has no schema ID or
+        // rev, and has raw data.
+        ArgumentCaptor<UploadValidationContext> contextCaptor = ArgumentCaptor.forClass(UploadValidationContext.class);
+        verify(mockStrictValidationHandler).handle(contextCaptor.capture());
+
+        UploadValidationContext context = contextCaptor.getValue();
+        HealthDataRecord contextRecord = context.getHealthDataRecord();
+        assertNull(contextRecord.getSchemaId());
+        assertNull(contextRecord.getSchemaRevision());
+
+        // Validate raw data submitted to S3.
+        String expectedRawDataAttachmentId = context.getUploadId() + HealthDataService.RAW_ATTACHMENT_SUFFIX;
+        ArgumentCaptor<byte[]> rawBytesCaptor = ArgumentCaptor.forClass(byte[].class);
+        verify(mockUploadFileHelper).uploadBytesAsAttachment(eq(expectedRawDataAttachmentId),
+                rawBytesCaptor.capture());
+        assertEquals(contextRecord.getRawDataAttachmentId(), expectedRawDataAttachmentId);
+
+        byte[] rawBytes = rawBytesCaptor.getValue();
+        JsonNode rawJsonNode = BridgeObjectMapper.get().readTree(rawBytes);
+        assertEquals(rawJsonNode, inputData);
     }
 
     @Test(expectedExceptions = BadRequestException.class)

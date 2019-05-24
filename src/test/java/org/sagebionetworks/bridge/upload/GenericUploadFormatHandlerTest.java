@@ -6,8 +6,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
@@ -417,6 +419,35 @@ public class GenericUploadFormatHandlerTest {
         verify(mockUploadFileHelper, never()).uploadJsonNodeAsAttachment(any(), any(), any());
     }
 
+    @Test
+    public void schemaless() throws Exception {
+        // Setup inputs. Create a dummy file, which is ignored because we don't have a schema.
+        File dummyFile = makeFileWithContent("dummy", "dummy content");
+        Map<String, File> fileMap = ImmutableMap.<String, File>builder().put("dummy", dummyFile).build();
+
+        UploadValidationContext context = makeContextWithContent(fileMap);
+        ObjectNode infoJsonNode = makeInfoJson();
+        context.setInfoJsonNode(infoJsonNode);
+
+        // Execute.
+        handler.handle(context);
+
+        // Verify that we don't set a schema, but we do set a createdOn.
+        HealthDataRecord record = context.getHealthDataRecord();
+        assertEquals(record.getCreatedOn().longValue(), CREATED_ON_MILLIS);
+        assertEquals(record.getCreatedOnTimeZone(), CREATED_ON_TIMEZONE);
+        assertNull(record.getSchemaId());
+        assertNull(record.getSchemaRevision());
+        assertTrue(context.getMessageList().isEmpty());
+
+        // Data map is empty. No schema means no data parsed.
+        JsonNode dataMap = context.getHealthDataRecord().getData();
+        assertEquals(dataMap.size(), 0);
+
+        // We never upload anything either.
+        verifyZeroInteractions(mockUploadFileHelper);
+    }
+
     private void mockSchemaServiceWithFields(UploadFieldDefinition... fieldDefVarargs) {
         UploadSchema schema = UploadSchema.create();
         schema.setSchemaId(SCHEMA_ID);
@@ -424,7 +455,7 @@ public class GenericUploadFormatHandlerTest {
         schema.setRevision(SCHEMA_REV);
         schema.setFieldDefinitions(ImmutableList.copyOf(fieldDefVarargs));
 
-        when(mockSchemaService.getUploadSchemaByIdAndRev(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(
+        when(mockSchemaService.getUploadSchemaByIdAndRevNoThrow(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(
                 schema);
     }
 
@@ -467,7 +498,7 @@ public class GenericUploadFormatHandlerTest {
         assertEquals(record.getCreatedOn().longValue(), CREATED_ON_MILLIS);
         assertEquals(record.getCreatedOnTimeZone(), CREATED_ON_TIMEZONE);
         assertEquals(record.getSchemaId(), SCHEMA_ID);
-        assertEquals(record.getSchemaRevision(), SCHEMA_REV);
+        assertEquals(record.getSchemaRevision().intValue(), SCHEMA_REV);
 
         // No messages.
         assertTrue(context.getMessageList().isEmpty());

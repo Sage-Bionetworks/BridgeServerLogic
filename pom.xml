@@ -5,7 +5,7 @@
 
     <groupId>org.sagebionetworks</groupId>
     <artifactId>BridgeServerLogic</artifactId>
-    <version>1.0.5</version>
+    <version>1.0.6</version>
 
     <properties>
         <aws.version>1.11.198</aws.version>

@@ -2,9 +2,8 @@ package org.sagebionetworks.bridge.upload;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
-import static org.testng.Assert.fail;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -36,7 +35,7 @@ public class GenericUploadFormatHandlerGetSchemaTest {
     @BeforeMethod
     public void setup() {
         UploadSchemaService mockSchemaService = mock(UploadSchemaService.class);
-        when(mockSchemaService.getUploadSchemaByIdAndRev(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(
+        when(mockSchemaService.getUploadSchemaByIdAndRevNoThrow(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(
                 DUMMY_SCHEMA);
 
         mockSurveyService = mock(SurveyService.class);
@@ -47,7 +46,7 @@ public class GenericUploadFormatHandlerGetSchemaTest {
     }
 
     @Test
-    public void schemaFromSurvey() throws Exception {
+    public void schemaFromSurvey() {
         // mock survey service
         Survey survey = Survey.create();
         survey.setIdentifier(SCHEMA_ID);
@@ -67,7 +66,7 @@ public class GenericUploadFormatHandlerGetSchemaTest {
     }
 
     @Test
-    public void surveyWithoutSchema() throws Exception {
+    public void surveyWithoutSchema() {
         // mock survey service - A survey always has an identifier, but if it doesn't have a schema, then it doesn't
         // have a schema rev.
         Survey survey = Survey.create();
@@ -82,18 +81,33 @@ public class GenericUploadFormatHandlerGetSchemaTest {
         infoJsonNode.put(UploadUtil.FIELD_SURVEY_GUID, SURVEY_GUID);
         infoJsonNode.put(UploadUtil.FIELD_SURVEY_CREATED_ON, SURVEY_CREATED_ON_STRING);
 
-        // execute and catch exception
-        try {
-            handler.getUploadSchema(TestConstants.TEST_STUDY, infoJsonNode);
-            fail("expected exception");
-        } catch (UploadValidationException ex) {
-            assertEquals(ex.getMessage(),
-                    "Schema not found for survey " + SURVEY_GUID + ":" + SURVEY_CREATED_ON_MILLIS);
-        }
+        // Execute. Returns null.
+        UploadSchema retVal = handler.getUploadSchema(TestConstants.TEST_STUDY, infoJsonNode);
+        assertNull(retVal);
     }
 
     @Test
-    public void schemaFromIdAndRev() throws Exception {
+    public void surveySchemaNotFound() {
+        // Mock survey service.
+        Survey survey = Survey.create();
+        survey.setIdentifier("missing-schema");
+        survey.setSchemaRevision(SCHEMA_REV);
+        when(mockSurveyService.getSurvey(TestConstants.TEST_STUDY,
+                new GuidCreatedOnVersionHolderImpl(SURVEY_GUID, SURVEY_CREATED_ON_MILLIS), false, true))
+                .thenReturn(survey);
+
+        // Make info.json.
+        ObjectNode infoJsonNode = BridgeObjectMapper.get().createObjectNode();
+        infoJsonNode.put(UploadUtil.FIELD_SURVEY_GUID, SURVEY_GUID);
+        infoJsonNode.put(UploadUtil.FIELD_SURVEY_CREATED_ON, SURVEY_CREATED_ON_STRING);
+
+        // Execute. Returns null.
+        UploadSchema retVal = handler.getUploadSchema(TestConstants.TEST_STUDY, infoJsonNode);
+        assertNull(retVal);
+    }
+
+    @Test
+    public void schemaFromIdAndRev() {
         // make info.json
         ObjectNode infoJsonNode = BridgeObjectMapper.get().createObjectNode();
         infoJsonNode.put(UploadUtil.FIELD_ITEM, SCHEMA_ID);
@@ -105,17 +119,24 @@ public class GenericUploadFormatHandlerGetSchemaTest {
     }
 
     @Test
-    public void noSchemaParams() throws Exception {
+    public void schemaNotFound() {
+        // make info.json
+        ObjectNode infoJsonNode = BridgeObjectMapper.get().createObjectNode();
+        infoJsonNode.put(UploadUtil.FIELD_ITEM, "missing-schema");
+        infoJsonNode.put(UploadUtil.FIELD_SCHEMA_REV, SCHEMA_REV);
+
+        // Execute. Returns null.
+        UploadSchema retVal = handler.getUploadSchema(TestConstants.TEST_STUDY, infoJsonNode);
+        assertNull(retVal);
+    }
+
+    @Test
+    public void noSchemaParams() {
         // make info.json w/ no params
         ObjectNode infoJsonNode = BridgeObjectMapper.get().createObjectNode();
 
-        // execute and catch exception
-        try {
-            handler.getUploadSchema(TestConstants.TEST_STUDY, infoJsonNode);
-            fail("expected exception");
-        } catch (UploadValidationException ex) {
-            assertEquals(ex.getMessage(),
-                    "info.json must contain either item and schemaRevision or surveyGuid and surveyCreatedOn");
-        }
+        // Execute. Returns null.
+        UploadSchema retVal = handler.getUploadSchema(TestConstants.TEST_STUDY, infoJsonNode);
+        assertNull(retVal);
     }
 }

@@ -56,8 +56,6 @@ public class HealthDataRecordTest {
         assertEquals(record.getHealthCode(), "dummy healthcode");
         assertNull(record.getId());
         assertSame(record.getMetadata(), DUMMY_METADATA);
-        assertEquals(record.getSchemaId(), "dummy schema");
-        assertEquals(record.getSchemaRevision(), 3);
         assertEquals(record.getStudyId(), "dummy study");
         assertEquals(record.getUploadDate(), UPLOAD_DATE);
         assertEquals(record.getUserDataGroups(), TestConstants.USER_DATA_GROUPS);
@@ -76,6 +74,8 @@ public class HealthDataRecordTest {
         record.setCreatedOnTimeZone("+0900");
         record.setPhoneInfo(PHONE_INFO);
         record.setRawDataAttachmentId("raw.zip");
+        record.setSchemaId("dummy schema");
+        record.setSchemaRevision(3);
         record.setSynapseExporterStatus(HealthDataRecord.ExporterStatus.NOT_EXPORTED);
         record.setUploadId("optional upload ID");
         record.setUploadedOn(uploadedOn);
@@ -92,6 +92,8 @@ public class HealthDataRecordTest {
         assertEquals(record.getCreatedOnTimeZone(), "+0900");
         assertEquals(record.getPhoneInfo(), PHONE_INFO);
         assertEquals(record.getRawDataAttachmentId(), "raw.zip");
+        assertEquals(record.getSchemaId(), "dummy schema");
+        assertEquals(record.getSchemaRevision().intValue(), 3);
         assertEquals(record.getSynapseExporterStatus(), HealthDataRecord.ExporterStatus.NOT_EXPORTED);
         assertEquals(record.getUploadId(), "optional upload ID");
         assertEquals(record.getUploadedOn().longValue(), uploadedOn);
@@ -189,18 +191,36 @@ public class HealthDataRecordTest {
         Validate.entityThrowingException(HealthDataRecordValidator.INSTANCE, record);
     }
 
-    @Test(expectedExceptions = InvalidEntityException.class)
-    public void nullSchemaId() {
-        HealthDataRecord record = makeValidRecord();
-        record.setSchemaId(null);
-        Validate.entityThrowingException(HealthDataRecordValidator.INSTANCE, record);
-    }
-
-    @Test(expectedExceptions = InvalidEntityException.class)
+    @Test
     public void emptySchemaId() {
         HealthDataRecord record = makeValidRecord();
         record.setSchemaId("");
-        Validate.entityThrowingException(HealthDataRecordValidator.INSTANCE, record);
+        assertValidatorMessage(HealthDataRecordValidator.INSTANCE, record, "schemaId",
+                "can't be blank if specified");
+    }
+
+    @Test
+    public void blankSchemaId() {
+        HealthDataRecord record = makeValidRecord();
+        record.setSchemaId("   ");
+        assertValidatorMessage(HealthDataRecordValidator.INSTANCE, record, "schemaId",
+                "can't be blank if specified");
+    }
+
+    @Test
+    public void zeroSchemaRevision() {
+        HealthDataRecord record = makeValidRecord();
+        record.setSchemaRevision(0);
+        assertValidatorMessage(HealthDataRecordValidator.INSTANCE, record, "schemaRevision",
+                "can't be zero or negative");
+    }
+
+    @Test
+    public void negativeSchemaRevision() {
+        HealthDataRecord record = makeValidRecord();
+        record.setSchemaRevision(-1);
+        assertValidatorMessage(HealthDataRecordValidator.INSTANCE, record, "schemaRevision",
+                "can't be zero or negative");
     }
 
     @Test(expectedExceptions = InvalidEntityException.class)
@@ -259,8 +279,6 @@ public class HealthDataRecordTest {
         record.setData(DUMMY_DATA);
         record.setHealthCode("dummy healthcode");
         record.setMetadata(DUMMY_METADATA);
-        record.setSchemaId("dummy schema");
-        record.setSchemaRevision(3);
         record.setStudyId("dummy study");
         record.setUploadDate(UPLOAD_DATE);
         record.setUserDataGroups(TestConstants.USER_DATA_GROUPS);
@@ -309,7 +327,7 @@ public class HealthDataRecordTest {
         assertEquals(record.getPhoneInfo(), PHONE_INFO);
         assertEquals(record.getRawDataAttachmentId(), "raw.zip");
         assertEquals(record.getSchemaId(), "json schema");
-        assertEquals(record.getSchemaRevision(), 3);
+        assertEquals(record.getSchemaRevision().intValue(), 3);
         assertEquals(record.getStudyId(), "json study");
         assertEquals(record.getSynapseExporterStatus(), HealthDataRecord.ExporterStatus.NOT_EXPORTED);
         assertEquals(record.getUploadDate().toString(ISODateTimeFormat.date()), "2014-02-12");

@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -14,7 +13,6 @@ import com.google.common.base.Preconditions;
 import org.apache.commons.lang3.StringUtils;
 
 import org.sagebionetworks.bridge.BridgeUtils;
-import org.sagebionetworks.bridge.exceptions.EntityNotFoundException;
 import org.sagebionetworks.bridge.exceptions.NotFoundException;
 import org.sagebionetworks.bridge.json.BridgeObjectMapper;
 import org.sagebionetworks.bridge.models.GuidCreatedOnVersionHolder;
@@ -58,7 +56,6 @@ public class HealthDataService {
     private static final int MAX_DATE_RANGE_DAYS = 15;
 
     // Package-scoped for unit tests.
-    static final long CREATED_ON_OFFSET_MILLIS = TimeUnit.MILLISECONDS.convert(1, TimeUnit.HOURS);
     static final String RAW_ATTACHMENT_SUFFIX = "-raw.json";
 
     private HealthDataDao healthDataDao;
@@ -133,21 +130,21 @@ public class HealthDataService {
         }
         Validate.entityThrowingException(HealthDataSubmissionValidator.INSTANCE, healthDataSubmission);
 
-        // sanitize field names in the data node
-        JsonNode sanitizedData = sanitizeFieldNames(healthDataSubmission.getData());
-
-        // get schema
-        UploadSchema schema = getSchemaForSubmission(studyId, healthDataSubmission);
-
         // Generate a new uploadId.
         String uploadId = BridgeUtils.generateGuid();
 
-        // Filter data fields and attachments based on schema fields.
-        ObjectNode filteredData = BridgeObjectMapper.get().createObjectNode();
-        filterAttachments(uploadId, schema, sanitizedData, filteredData);
-
         // construct health data record
-        HealthDataRecord record = makeRecordFromSubmission(studyId, participant, schema, healthDataSubmission, filteredData);
+        HealthDataRecord record = makeRecordFromSubmission(studyId, participant, healthDataSubmission);
+
+        // get schema
+        UploadSchema schema = getSchemaForSubmission(studyId, healthDataSubmission);
+        if (schema != null) {
+            // sanitize field names in the data node
+            JsonNode sanitizedData = sanitizeFieldNames(healthDataSubmission.getData());
+
+            // Filter data fields and attachments based on schema fields.
+            filterAttachments(uploadId, schema, sanitizedData, record);
+        }
 
         // Construct UploadValidationContext for the remaining upload handlers. We don't need all the fields, just the
         // ones that these handlers will be using.
@@ -209,9 +206,10 @@ public class HealthDataService {
     // Helper method which encapsulates getting the schema, either by schemaId/Revision or by surveyGuid/CreatedOn.
     private UploadSchema getSchemaForSubmission(StudyIdentifier studyId, HealthDataSubmission healthDataSubmission) {
         if (healthDataSubmission.getSchemaId() != null) {
-            return schemaService.getUploadSchemaByIdAndRev(studyId, healthDataSubmission.getSchemaId(),
+            // Note that if there's no schema, we treat this like schemaless.
+            return schemaService.getUploadSchemaByIdAndRevNoThrow(studyId, healthDataSubmission.getSchemaId(),
                     healthDataSubmission.getSchemaRevision());
-        } else {
+        } else if (healthDataSubmission.getSurveyGuid() != null) {
             // surveyCreatedOn is a timestamp. SurveyService takes long epoch millis. Convert.
             long surveyCreatedOnMillis = healthDataSubmission.getSurveyCreatedOn().getMillis();
 
@@ -223,12 +221,16 @@ public class HealthDataService {
             String schemaId = survey.getIdentifier();
             Integer schemaRev = survey.getSchemaRevision();
             if (StringUtils.isBlank(schemaId) || schemaRev == null) {
-                throw new EntityNotFoundException(UploadSchema.class, "Schema not found for survey " + surveyGuid +
-                        ":" + surveyCreatedOnMillis);
+                // Schemaless.
+                return null;
             }
 
             // Get the schema with the schema ID and rev.
-            return schemaService.getUploadSchemaByIdAndRev(studyId, schemaId, schemaRev);
+            // Note that if there's no schema, we treat this like schemaless.
+            return schemaService.getUploadSchemaByIdAndRevNoThrow(studyId, schemaId, schemaRev);
+        } else {
+            // Schemaless.
+            return null;
         }
     }
 
@@ -236,8 +238,12 @@ public class HealthDataService {
      * Helper method, which goes through the given schema, and splits the input data into field values and attachments.
      * Fields that are not present in the schema are silently dropped.
      */
-    private void filterAttachments(String recordId, UploadSchema schema, JsonNode inputData, ObjectNode outputData)
+    private void filterAttachments(String recordId, UploadSchema schema, JsonNode inputData, HealthDataRecord record)
             throws UploadValidationException {
+        record.setSchemaId(schema.getSchemaId());
+        record.setSchemaRevision(schema.getRevision());
+        ObjectNode outputData = (ObjectNode) record.getData();
+
         for (UploadFieldDefinition oneFieldDef : schema.getFieldDefinitions()) {
             String fieldName = oneFieldDef.getName();
             JsonNode fieldValue = inputData.get(fieldName);
@@ -271,27 +277,24 @@ public class HealthDataService {
      *         study this health data was submitted to
      * @param participant
      *         participant who submitted the data
-     * @param schema
-     *         the schema this data is submitted for
      * @param healthDataSubmission
      *         the data submission
-     * @param filteredData
-     *         raw data, after being sanitized and filtered
      * @return created health data record
      */
     private static HealthDataRecord makeRecordFromSubmission(StudyIdentifier studyId, StudyParticipant participant,
-            UploadSchema schema, HealthDataSubmission healthDataSubmission, JsonNode filteredData) {
+            HealthDataSubmission healthDataSubmission) {
         // from submission
         HealthDataRecord record = HealthDataRecord.create();
         record.setAppVersion(healthDataSubmission.getAppVersion());
         record.setPhoneInfo(healthDataSubmission.getPhoneInfo());
         record.setUserMetadata(healthDataSubmission.getMetadata());
 
+        // Initialize record data node.
+        ObjectNode dataNode = BridgeObjectMapper.get().createObjectNode();
+        record.setData(dataNode);
+
         // from elsewhere
-        record.setData(filteredData);
         record.setHealthCode(participant.getHealthCode());
-        record.setSchemaId(schema.getSchemaId());
-        record.setSchemaRevision(schema.getRevision());
         record.setStudyId(studyId.getIdentifier());
         record.setUploadDate(DateUtils.getCurrentCalendarDateInLocalTime());
         record.setUploadedOn(DateUtils.getCurrentMillisFromEpoch());
@@ -416,21 +419,6 @@ public class HealthDataService {
 
         return healthDataDao.getRecordsByHealthCodeCreatedOn(healthCode, createdOnStart.getMillis(),
                 createdOnEnd.getMillis());
-    }
-
-    /** Get a list of records with the same healthCode and schemaId that are within an hour of the createdOn. */
-    public List<HealthDataRecord> getRecordsByHealthcodeCreatedOnSchemaId(String healthCode, long createdOn, String schemaId) {
-        if (StringUtils.isBlank(healthCode)) {
-            throw new BadRequestException(String.format(Validate.CANNOT_BE_BLANK, "healthCode"));
-        }
-        if (StringUtils.isBlank(schemaId)) {
-            throw new BadRequestException(String.format(Validate.CANNOT_BE_BLANK, "schemaId"));
-        }
-
-        List<HealthDataRecord> recordList = healthDataDao.getRecordsByHealthCodeCreatedOn(healthCode,
-                createdOn - CREATED_ON_OFFSET_MILLIS, createdOn + CREATED_ON_OFFSET_MILLIS);
-        return recordList.stream().filter(record -> schemaId.equals(record.getSchemaId())).collect(
-                Collectors.toList());
     }
 
     /**

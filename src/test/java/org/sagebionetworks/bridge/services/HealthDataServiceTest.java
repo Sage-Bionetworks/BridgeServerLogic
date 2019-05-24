@@ -5,7 +5,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertSame;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -295,53 +294,6 @@ public class HealthDataServiceTest {
         List<HealthDataRecord> retList = svc.getRecordsByHealthCodeCreatedOn(TEST_HEALTH_CODE,
                 TEST_CREATED_ON_DATE_TIME, TEST_CREATED_ON_DATE_TIME);
         assertEquals(retList, mockResult);
-    }
-
-    @Test(expectedExceptions = BadRequestException.class)
-    public void getRecordsByEmptyHealthcodeCreatedOnSchemaId() {
-        new HealthDataService().getRecordsByHealthcodeCreatedOnSchemaId("", TEST_CREATED_ON, TEST_SCHEMA_ID);
-    }
-
-    @Test(expectedExceptions = BadRequestException.class)
-    public void getRecordsByNullHealthcodeCreatedOnSchemaId() {
-        new HealthDataService().getRecordsByHealthcodeCreatedOnSchemaId(null, TEST_CREATED_ON, TEST_SCHEMA_ID);
-    }
-
-    @Test(expectedExceptions = BadRequestException.class)
-    public void getRecordsByHealthcodeCreatedOnEmptySchemaId() {
-        new HealthDataService().getRecordsByHealthcodeCreatedOnSchemaId(TEST_HEALTH_CODE, TEST_CREATED_ON, "");
-    }
-
-    @Test(expectedExceptions = BadRequestException.class)
-    public void getRecordsByHealthcodeCreatedOnNullSchemaId() {
-        new HealthDataService().getRecordsByHealthcodeCreatedOnSchemaId(TEST_HEALTH_CODE, TEST_CREATED_ON, null);
-    }
-
-    @Test
-    public void getRecordsByHealthcodeCreatedOnSchemaId() {
-        // For branch coverage, first record has the wrong schema ID.
-        HealthDataRecord wrongSchemaRecord = makeValidRecord();
-        wrongSchemaRecord.setId("wrong-schema-record");
-        wrongSchemaRecord.setSchemaId("wrong-" + TEST_SCHEMA_ID);
-
-        // Normal record, which will be returned by our mock.
-        HealthDataRecord record = makeValidRecord();
-
-        // mock dao
-        HealthDataDao mockDao = mock(HealthDataDao.class);
-        when(mockDao.getRecordsByHealthCodeCreatedOn(TEST_HEALTH_CODE,
-                TEST_CREATED_ON - HealthDataService.CREATED_ON_OFFSET_MILLIS,
-                TEST_CREATED_ON + HealthDataService.CREATED_ON_OFFSET_MILLIS))
-                .thenReturn(ImmutableList.of(wrongSchemaRecord, record));
-
-        HealthDataService svc = new HealthDataService();
-        svc.setHealthDataDao(mockDao);
-
-        // execute and verify
-        List<HealthDataRecord> retList = svc.getRecordsByHealthcodeCreatedOnSchemaId(TEST_HEALTH_CODE, TEST_CREATED_ON,
-                TEST_SCHEMA_ID);
-        assertEquals(retList.size(), 1);
-        assertSame(retList.get(0), record);
     }
 
     private static HealthDataRecord makeValidRecord() {

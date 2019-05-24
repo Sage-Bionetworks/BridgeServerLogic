@@ -369,6 +369,19 @@ public class UploadSchemaService {
      * throws an EntityNotFoundException
      */
     public UploadSchema getUploadSchemaByIdAndRev(StudyIdentifier studyId, String schemaId, int revision) {
+        UploadSchema schema = getUploadSchemaByIdAndRevNoThrow(studyId, schemaId, revision);
+        if (schema == null) {
+            throw new EntityNotFoundException(UploadSchema.class, "Can't find schema " + schemaId + "-v" + revision);
+        }
+        return schema;
+    }
+
+    /**
+     * Fetches the upload schema for the specified study, schema ID, and revision. If no schema is found, this API
+     * returns null.
+     */
+    public UploadSchema getUploadSchemaByIdAndRevNoThrow(StudyIdentifier studyId, String schemaId,
+            int revision) {
         if (StringUtils.isBlank(schemaId)) {
             throw new BadRequestException("Schema ID must be specified");
         }
@@ -376,11 +389,7 @@ public class UploadSchemaService {
             throw new BadRequestException("Revision must be specified and positive");
         }
 
-        UploadSchema schema = uploadSchemaDao.getUploadSchemaByIdAndRevision(studyId, schemaId, revision);
-        if (schema == null) {
-            throw new EntityNotFoundException(UploadSchema.class, "Can't find schema " + schemaId + "-v" + revision);
-        }
-        return schema;
+        return uploadSchemaDao.getUploadSchemaByIdAndRevision(studyId, schemaId, revision);
     }
 
     /**

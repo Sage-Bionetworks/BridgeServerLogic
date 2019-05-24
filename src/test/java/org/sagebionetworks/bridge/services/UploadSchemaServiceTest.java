@@ -639,6 +639,29 @@ public class UploadSchemaServiceTest {
         assertSame(svcOutputSchema, daoOutputSchema);
     }
 
+    @Test
+    public void getByIdAndRevNoThrowNull() {
+        // mock dao to return null
+        when(dao.getUploadSchemaByIdAndRevision(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(null);
+
+        // execute and validate
+        UploadSchema retVal = svc.getUploadSchemaByIdAndRevNoThrow(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV);
+        assertNull(retVal);
+    }
+
+    @Test
+    public void getByIdAndRevNoThrowSuccess() {
+        // mock dao
+        UploadSchema daoOutputSchema = makeSimpleSchema();
+        when(dao.getUploadSchemaByIdAndRevision(TestConstants.TEST_STUDY, SCHEMA_ID, SCHEMA_REV)).thenReturn(
+                daoOutputSchema);
+
+        // execute and validate
+        UploadSchema svcOutputSchema = svc.getUploadSchemaByIdAndRevNoThrow(TestConstants.TEST_STUDY, SCHEMA_ID,
+                SCHEMA_REV);
+        assertSame(svcOutputSchema, daoOutputSchema);
+    }
+
     @Test(expectedExceptions = BadRequestException.class)
     public void getLatestNullId() {
         svc.getLatestUploadSchemaRevisionForAppVersion(TestConstants.TEST_STUDY, null, ClientInfo.UNKNOWN_CLIENT);

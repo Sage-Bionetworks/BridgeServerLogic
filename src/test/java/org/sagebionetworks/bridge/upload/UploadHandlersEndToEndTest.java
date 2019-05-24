@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
 import java.io.File;
@@ -228,8 +229,12 @@ public class UploadHandlersEndToEndTest {
 
         // mock schema service
         UploadSchemaService mockUploadSchemaService = mock(UploadSchemaService.class);
-        when(mockUploadSchemaService.getUploadSchemaByIdAndRev(TestConstants.TEST_STUDY, schema.getSchemaId(),
-                schema.getRevision())).thenReturn(schema);
+        if (schema != null) {
+            when(mockUploadSchemaService.getUploadSchemaByIdAndRev(TestConstants.TEST_STUDY, schema.getSchemaId(),
+                    schema.getRevision())).thenReturn(schema);
+            when(mockUploadSchemaService.getUploadSchemaByIdAndRevNoThrow(TestConstants.TEST_STUDY,
+                    schema.getSchemaId(), schema.getRevision())).thenReturn(schema);
+        }
 
         // mock survey service
         SurveyService mockSurveyService = mock(SurveyService.class);
@@ -277,11 +282,6 @@ public class UploadHandlersEndToEndTest {
 
         TranscribeConsentHandler transcribeConsentHandler = new TranscribeConsentHandler();
         transcribeConsentHandler.setAccountDao(mockAccountDao);
-
-        // mock HealthDataService should return empty list for getRecordsByHealthcodeCreatedOnSchemaId(), so dedupe
-        // logic doesn't crash
-        when(mockHealthDataService.getRecordsByHealthcodeCreatedOnSchemaId(HEALTH_CODE, CREATED_ON_MILLIS,
-                schema.getSchemaId())).thenReturn(ImmutableList.of());
 
         // Set up UploadRawZipHandler.
         UploadRawZipHandler uploadRawZipHandler = new UploadRawZipHandler();
@@ -378,7 +378,7 @@ public class UploadHandlersEndToEndTest {
         HealthDataRecord record = recordCaptor.getValue();
         validateCommonRecordProps(record);
         assertEquals(record.getSchemaId(), SURVEY_ID);
-        assertEquals(record.getSchemaRevision(), SURVEY_SCHEMA_REV);
+        assertEquals(record.getSchemaRevision().intValue(), SURVEY_SCHEMA_REV);
 
         JsonNode dataNode = record.getData();
         assertEquals(dataNode.size(), 4);
@@ -591,7 +591,7 @@ public class UploadHandlersEndToEndTest {
         HealthDataRecord record = recordCaptor.getValue();
         validateCommonRecordProps(record);
         assertEquals(record.getSchemaId(), SCHEMA_ID);
-        assertEquals(record.getSchemaRevision(), SCHEMA_REV);
+        assertEquals(record.getSchemaRevision().intValue(), SCHEMA_REV);
 
         JsonNode dataNode = record.getData();
         assertEquals(dataNode.size(), 15);
@@ -707,6 +707,44 @@ public class UploadHandlersEndToEndTest {
 
         // execute
         testNonSurvey(infoJsonText);
+    }
+
+    @Test
+    public void schemaless() throws Exception {
+        // Make info.json.
+        String infoJsonText = "{\n" +
+                "   \"createdOn\":\"" + CREATED_ON_STRING + "\",\n" +
+                "   \"format\":\"v2_generic\",\n" +
+                "   \"appVersion\":\"" + APP_VERSION + "\",\n" +
+                "   \"phoneInfo\":\"" + PHONE_INFO + "\"\n" +
+                "}";
+
+        // Create a dummy file, which is ignored because we don't have a schema.
+        Map<String, String> fileMap = ImmutableMap.<String, String>builder().put("info.json", infoJsonText)
+                .put("dummy", "dummy content").build();
+
+        // Execute.
+        test(null, null, fileMap);
+
+        // Verify created record.
+        ArgumentCaptor<HealthDataRecord> recordCaptor = ArgumentCaptor.forClass(HealthDataRecord.class);
+        verify(mockHealthDataService).createOrUpdateRecord(recordCaptor.capture());
+
+        HealthDataRecord record = recordCaptor.getValue();
+        validateCommonRecordProps(record);
+        assertNull(record.getSchemaId());
+        assertNull(record.getSchemaRevision());
+
+        // Data map is empty. No schema means no data parsed.
+        JsonNode dataNode = record.getData();
+        assertEquals(dataNode.size(), 0);
+
+        // Only 1 attachment, and that's raw data.
+        assertEquals(uploadedFileContentMap.size(), 1);
+        validateRawDataAttachment();
+
+        // verify upload dao write validation status
+        verify(mockUploadDao).writeValidationStatus(UPLOAD, UploadStatus.SUCCEEDED, ImmutableList.of(), UPLOAD_ID);
     }
 
     private void validateTextAttachment(String expected, String attachmentId) {

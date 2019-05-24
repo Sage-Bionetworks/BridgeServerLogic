@@ -4,6 +4,7 @@ import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
@@ -135,8 +136,10 @@ public class IosSchemaValidationHandler2Test {
 
         // mock upload schema service
         UploadSchemaService mockSchemaService = mock(UploadSchemaService.class);
-        when(mockSchemaService.getUploadSchemaByIdAndRev(study, "test-survey", 1)).thenReturn(surveySchema);
-        when(mockSchemaService.getUploadSchemaByIdAndRev(study, "non-survey", 1)).thenReturn(nonSurveySchema);
+        when(mockSchemaService.getUploadSchemaByIdAndRevNoThrow(study, "test-survey", 1))
+                .thenReturn(surveySchema);
+        when(mockSchemaService.getUploadSchemaByIdAndRevNoThrow(study, "non-survey", 1))
+                .thenReturn(nonSurveySchema);
 
         // mock upload file helper
         mockUploadFileHelper = mock(UploadFileHelper.class);
@@ -306,7 +309,7 @@ public class IosSchemaValidationHandler2Test {
         assertEquals(record.getCreatedOn().longValue(), DateTime.parse("2015-04-02T03:27:09-07:00").getMillis());
         assertEquals(record.getCreatedOnTimeZone(), "-0700");
         assertEquals(record.getSchemaId(), "test-survey");
-        assertEquals(record.getSchemaRevision(), 1);
+        assertEquals(record.getSchemaRevision().intValue(), 1);
 
         JsonNode dataNode = record.getData();
         assertEquals(dataNode.size(), 10);
@@ -394,7 +397,7 @@ public class IosSchemaValidationHandler2Test {
         assertEquals(record.getCreatedOn().longValue(), DateTime.parse("2015-04-13T18:47:41-07:00").getMillis());
         assertEquals(record.getCreatedOnTimeZone(), "-0700");
         assertEquals(record.getSchemaId(), "non-survey");
-        assertEquals(record.getSchemaRevision(), 1);
+        assertEquals(record.getSchemaRevision().intValue(), 1);
 
         JsonNode dataNode = record.getData();
         assertEquals(dataNode.size(), 1);
@@ -416,6 +419,41 @@ public class IosSchemaValidationHandler2Test {
 
         // We should have no messages.
         assertTrue(context.getMessageList().isEmpty());
+    }
+
+    @Test
+    public void schemaless() throws Exception {
+        // Setup inputs. Create a dummy file, which is ignored because we don't have a schema.
+        String infoJsonText = "{\n" +
+                "   \"files\":[{\n" +
+                "       \"filename\":\"dummy\",\n" +
+                "       \"timestamp\":\"2019-05-24T12:44:35.664-07:00\"\n" +
+                "   }]\n" +
+                "}";
+        JsonNode infoJsonNode = BridgeObjectMapper.get().readTree(infoJsonText);
+        context.setInfoJsonNode(infoJsonNode);
+
+        Map<String, File> fileMap = new HashMap<>();
+        addFileToMap(fileMap, "dummy", "dummy content");
+        context.setUnzippedDataFileMap(fileMap);
+
+        // Execute.
+        handler.handle(context);
+
+        // Verify that we don't set a schema, but we do set a createdOn.
+        HealthDataRecord record = context.getHealthDataRecord();
+        assertEquals(record.getCreatedOn().longValue(), DateTime.parse("2019-05-24T12:44:35.664-07:00").getMillis());
+        assertEquals(record.getCreatedOnTimeZone(), "-0700");
+        assertNull(record.getSchemaId());
+        assertNull(record.getSchemaRevision());
+        assertTrue(context.getMessageList().isEmpty());
+
+        // Data map is empty. No schema means no data parsed.
+        JsonNode dataNode = record.getData();
+        assertEquals(dataNode.size(), 0);
+
+        // We never upload anything either.
+        verifyZeroInteractions(mockUploadFileHelper);
     }
 
     @Test

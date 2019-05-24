@@ -106,10 +106,10 @@ public interface HealthDataRecord extends BridgeEntity {
     void setSchemaId(String schemaId);
 
     /** Revision number of the schema of the health data. */
-    int getSchemaRevision();
+    Integer getSchemaRevision();
 
     /** @see #getSchemaRevision */
-    void setSchemaRevision(int schemaRevision);
+    void setSchemaRevision(Integer schemaRevision);
 
     /** Study ID that the health data record lives in. */
     String getStudyId();

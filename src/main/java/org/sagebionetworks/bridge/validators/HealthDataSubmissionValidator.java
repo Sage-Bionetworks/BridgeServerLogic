@@ -58,24 +58,14 @@ public class HealthDataSubmissionValidator implements Validator {
                 errors.rejectValue("phoneInfo", "is required");
             }
 
-            // HealthDataSubmission must have schemaId/Revision or surveyGuid/CreatedOn.
-            int sources = 0;
-
+            // HealthDataSubmission can't have both schemaId/Revision and surveyGuid/CreatedOn.
             String schemaId = healthDataSubmission.getSchemaId();
             Integer schemaRev = healthDataSubmission.getSchemaRevision();
-            if (schemaId != null && schemaRev != null) {
-                sources++;
-            }
-
             String surveyGuid = healthDataSubmission.getSurveyGuid();
             DateTime surveyCreatedOn = healthDataSubmission.getSurveyCreatedOn();
-            if (surveyGuid != null && surveyCreatedOn != null) {
-                sources++;
-            }
-
-            if (sources != 1) {
-                errors.rejectValue("healthDataSubmission", "must have either schemaId/Revision or " +
-                        "surveyGuid/CreatedOn but not both");
+            if (schemaId != null && schemaRev != null && surveyGuid != null && surveyCreatedOn != null) {
+                errors.rejectValue("healthDataSubmission", "can't have both schemaId/Revision and " +
+                        "surveyGuid/CreatedOn");
             }
 
             // schemaId

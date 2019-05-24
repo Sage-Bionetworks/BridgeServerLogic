@@ -148,8 +148,7 @@ public class HealthDataSubmissionValidatorTest {
     @Test
     public void neitherSchemaNorSurvey() {
         HealthDataSubmission healthDataSubmission = makeValidBuilderWithoutSchemaOrSurvey().build();
-        assertValidatorMessage(HealthDataSubmissionValidator.INSTANCE, healthDataSubmission, "healthDataSubmission",
-                "must have either schemaId/Revision or surveyGuid/CreatedOn but not both");
+        Validate.entityThrowingException(HealthDataSubmissionValidator.INSTANCE, healthDataSubmission);
     }
 
     @Test
@@ -158,7 +157,7 @@ public class HealthDataSubmissionValidatorTest {
                 .withSchemaRevision(SCHEMA_REV).withSurveyGuid(SURVEY_GUID).withSurveyCreatedOn(SURVEY_CREATED_ON)
                 .build();
         assertValidatorMessage(HealthDataSubmissionValidator.INSTANCE, healthDataSubmission, "healthDataSubmission",
-                "must have either schemaId/Revision or surveyGuid/CreatedOn but not both");
+                "can't have both schemaId/Revision and surveyGuid/CreatedOn");
     }
 
     @Test

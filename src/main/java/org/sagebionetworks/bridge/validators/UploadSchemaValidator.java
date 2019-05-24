@@ -1,7 +1,10 @@
 package org.sagebionetworks.bridge.validators;
 
 import java.util.List;
+import java.util.Set;
 
+import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableSet;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.validation.Errors;
 import org.springframework.validation.Validator;
@@ -18,6 +21,9 @@ public class UploadSchemaValidator implements Validator {
 
     private static final int MAX_BYTES = 50000;
     private static final int MAX_COLUMNS = 100;
+
+    private static final Set<String> RESERVED_SCHEMA_NAME_SET = ImmutableSet.of("default");
+    private static final String RESERVED_SCHEMAS_USER_READABLE = Joiner.on(' ').join(RESERVED_SCHEMA_NAME_SET);
 
     /** {@inheritDoc} */
     @Override
@@ -75,6 +81,9 @@ public class UploadSchemaValidator implements Validator {
             // schema ID
             if (StringUtils.isBlank(uploadSchema.getSchemaId())) {
                 errors.rejectValue("schemaId", "is required");
+            } else if (RESERVED_SCHEMA_NAME_SET.contains(uploadSchema.getSchemaId())) {
+                errors.rejectValue("schemaId", "cannot be any reserved keyword: " +
+                        RESERVED_SCHEMAS_USER_READABLE);
             }
 
             // schema type

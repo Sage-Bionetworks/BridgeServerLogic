@@ -145,19 +145,19 @@ public class IosSchemaValidationHandler2 implements UploadValidationHandler {
 
         // schema
         UploadSchema schema = getUploadSchema(context.getStudy(), infoJson);
-        record.setSchemaId(schema.getSchemaId());
-        record.setSchemaRevision(schema.getRevision());
+        if (schema != null) {
+            record.setSchemaId(schema.getSchemaId());
+            record.setSchemaRevision(schema.getRevision());
 
-        UploadSchemaType schemaType = schema.getSchemaType();
-        if (schemaType == UploadSchemaType.IOS_SURVEY) {
-            // Convert survey format to JSON data format. This means creating a JSON data map where the "filenames" are
-            // just the question names (items) and the file data is the answer JSON node.
-            Map<String, JsonNode> convertedSurveyMap = convertSurveyToJsonData(context, uploadId, unzippedDataFileMap);
-            handleData(context, uploadId, convertedSurveyMap, unzippedDataFileMap, schema, dataMap);
-        } else if (schemaType == UploadSchemaType.IOS_DATA) {
-            handleData(context, uploadId, ImmutableMap.of(), unzippedDataFileMap, schema, dataMap);
-        } else {
-            throw new UploadValidationException(String.format("Invalid schema type %s", schemaType));
+            UploadSchemaType schemaType = schema.getSchemaType();
+            if (schemaType == UploadSchemaType.IOS_SURVEY) {
+                // Convert survey format to JSON data format. This means creating a JSON data map where the "filenames" are
+                // just the question names (items) and the file data is the answer JSON node.
+                Map<String, JsonNode> convertedSurveyMap = convertSurveyToJsonData(context, uploadId, unzippedDataFileMap);
+                handleData(context, uploadId, convertedSurveyMap, unzippedDataFileMap, schema, dataMap);
+            } else if (schemaType == UploadSchemaType.IOS_DATA) {
+                handleData(context, uploadId, ImmutableMap.of(), unzippedDataFileMap, schema, dataMap);
+            }
         }
     }
 
@@ -166,7 +166,7 @@ public class IosSchemaValidationHandler2 implements UploadValidationHandler {
     // Alternatively, surveyGuid and surveyCreatedOn are used to map the upload to a survey.
     //
     // This is package-scoped to facilitate unit tests.
-    UploadSchema getUploadSchema(StudyIdentifier study, JsonNode infoJson) throws UploadValidationException {
+    UploadSchema getUploadSchema(StudyIdentifier study, JsonNode infoJson) {
         // get relevant params from info.json
         String item = JsonUtils.asText(infoJson, UploadUtil.FIELD_ITEM);
         Integer schemaRev = JsonUtils.asInt(infoJson, UploadUtil.FIELD_SCHEMA_REV);
@@ -188,13 +188,12 @@ public class IosSchemaValidationHandler2 implements UploadValidationHandler {
             logger.warn("info.json missing item field, falling back to identifier field, identifier=" + identifier);
             return getUploadSchemaByItemAndRev(study, identifier, schemaRev);
         } else {
-            throw new UploadValidationException(
-                    "info.json must contain either item or surveyGuid and surveyCreatedOn");
+            // Schemaless.
+            return null;
         }
     }
 
-    private UploadSchema getUploadSchemaBySurvey(StudyIdentifier study, String surveyGuid, String surveyCreatedOn)
-            throws UploadValidationException {
+    private UploadSchema getUploadSchemaBySurvey(StudyIdentifier study, String surveyGuid, String surveyCreatedOn) {
         // surveyCreatedOn is a timestamp. SurveyService takes long epoch millis. Convert.
         long surveyCreatedOnMillis= DateUtils.convertToMillisFromEpoch(surveyCreatedOn);
 
@@ -205,12 +204,13 @@ public class IosSchemaValidationHandler2 implements UploadValidationHandler {
         String schemaId = survey.getIdentifier();
         Integer schemaRev = survey.getSchemaRevision();
         if (StringUtils.isBlank(schemaId) || schemaRev == null) {
-            throw new UploadValidationException("Schema not found for survey " + surveyGuid + ":" +
-                    surveyCreatedOnMillis);
+            // Schemaless.
+            return null;
         }
 
         // Get the schema with the schema ID and rev.
-        return uploadSchemaService.getUploadSchemaByIdAndRev(study, schemaId, schemaRev);
+        // Note that if there's no schema, we treat this like schemaless.
+        return uploadSchemaService.getUploadSchemaByIdAndRevNoThrow(study, schemaId, schemaRev);
     }
 
     private UploadSchema getUploadSchemaByItemAndRev(StudyIdentifier study, String item, Integer schemaRev) {
@@ -229,7 +229,8 @@ public class IosSchemaValidationHandler2 implements UploadValidationHandler {
         }
 
         // get schema
-        return uploadSchemaService.getUploadSchemaByIdAndRev(study, item, schemaRev);
+        // Note that if there's no schema, we treat this like schemaless.
+        return uploadSchemaService.getUploadSchemaByIdAndRevNoThrow(study, item, schemaRev);
     }
 
     private static void validateInfoJsonFileList(UploadValidationContext context, String uploadId,

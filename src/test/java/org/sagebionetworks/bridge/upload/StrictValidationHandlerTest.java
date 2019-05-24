@@ -1,6 +1,7 @@
 package org.sagebionetworks.bridge.upload;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 import static org.sagebionetworks.bridge.TestConstants.TEST_STUDY;
 import static org.testng.Assert.assertEquals;
@@ -414,5 +415,28 @@ public class StrictValidationHandlerTest {
     public void strictnessReportWithNoErrors() throws Exception {
         // No additional fields, data, or errors.
         test(null, null, null, null, UploadValidationStrictness.REPORT);
+    }
+
+    @Test
+    public void schemaless() throws Exception {
+        // Set up mocks.
+        StudyService mockStudyService = mock(StudyService.class);
+        UploadSchemaService mockUploadSchemaService = mock(UploadSchemaService.class);
+        handler.setStudyService(mockStudyService);
+        handler.setUploadSchemaService(mockUploadSchemaService);
+
+        // Create record with no schema.
+        HealthDataRecord record = HealthDataRecord.create();
+        record.setData(BridgeObjectMapper.get().createObjectNode());
+        record.setSchemaId(null);
+        record.setSchemaRevision(null);
+        context.setHealthDataRecord(record);
+
+        // Execute. No error messages.
+        handler.handle(context);
+        assertTrue(context.getMessageList().isEmpty());
+
+        // We don't ever use the dependent services.
+        verifyZeroInteractions(mockStudyService, mockUploadSchemaService);
     }
 }
