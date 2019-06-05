@@ -78,6 +78,11 @@ public class StrictValidationHandler implements UploadValidationHandler {
         HealthDataRecord record = context.getHealthDataRecord();
         JsonNode recordDataNode = record.getData();
         String schemaId = record.getSchemaId();
+        if (schemaId == null) {
+            // If this is null, we have a schemaless upload, so we can skip. If it's not null, then we got this from
+            // a schema that exists, so we can proceed.
+            return;
+        }
         int schemaRev = record.getSchemaRevision();
 
         // get schema

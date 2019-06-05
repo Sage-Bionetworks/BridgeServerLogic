@@ -179,6 +179,14 @@ public class UploadSchemaValidatorTest {
         Validate.entityThrowingException(UploadSchemaValidator.INSTANCE, schema);
     }
 
+    @Test
+    public void reservedSchemaId() {
+        UploadSchema schema = makeValidSchema();
+        schema.setSchemaId("default");
+        assertValidatorMessage(UploadSchemaValidator.INSTANCE, schema, "schemaId",
+                "cannot be any reserved keyword: default");
+    }
+
     @Test(expectedExceptions = InvalidEntityException.class)
     public void validateNullSchemaType() {
         UploadSchema schema = makeValidSchema();

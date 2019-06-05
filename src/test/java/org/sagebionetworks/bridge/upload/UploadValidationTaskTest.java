@@ -1,12 +1,9 @@
 package org.sagebionetworks.bridge.upload;
 
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.notNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
@@ -43,8 +40,6 @@ public class UploadValidationTaskTest {
     private static final long CREATED_ON = 1424136378727L;
     private static final String HEALTH_CODE = TestUtils.randomName(UploadValidationTaskTest.class);
     private static final String RECORD_ID = TestUtils.randomName(UploadValidationTaskTest.class);
-    private static final String RECORD_ID_2 = TestUtils.randomName(UploadValidationTaskTest.class);
-    private static final String RECORD_ID_3 = TestUtils.randomName(UploadValidationTaskTest.class);
     private static final String DATA_TEXT = "{\"data\":\"dummy value\"}";
     private static final String METADATA_TEXT = "{\"metadata\":\"dummy meta value\"}";
     private static final String SCHEMA_ID = TestUtils.randomName(UploadValidationTaskTest.class);
@@ -54,20 +49,11 @@ public class UploadValidationTaskTest {
     private static final long UPLOADED_ON = 1462575525894L;
     private static final String USER_EXTERNAL_ID = "external-id";
 
-    private HealthDataRecord testRecord;
-
-    private List<HealthDataRecord> testRecordDupeListMulti;
-
     private final List<UploadValidationHandler> handlerList = ImmutableList.of(
             new MessageHandler("foo was here"), new MessageHandler("bar was here"),
             new MessageHandler("kilroy was here"), new RecordIdHandler(RECORD_ID));
 
-    private final List<UploadValidationHandler> nullRecordIdHandlerList = ImmutableList.of(
-            new MessageHandler("foo was here"), new MessageHandler("bar was here"),
-            new MessageHandler("kilroy was here"), new RecordIdHandler(null));
-
     private UploadValidationContext ctx;
-    private HealthDataService healthDataService;
     private InMemoryFileHelper inMemoryFileHelper;
     private UploadDao mockDao;
     private UploadValidationTask task;
@@ -76,17 +62,9 @@ public class UploadValidationTaskTest {
     @BeforeMethod
     public void setup() throws IOException {
         // Mock health data service
-        testRecord = makeRecordWithId(RECORD_ID);
-        HealthDataRecord testRecordDupe = makeRecordWithId(RECORD_ID_2);
-        HealthDataRecord testRecordDupe2 = makeRecordWithId(RECORD_ID_3);
-
-        List<HealthDataRecord> testRecordDupeListNormal = ImmutableList.of(testRecord, testRecordDupe);
-        testRecordDupeListMulti = ImmutableList.of(testRecord, testRecordDupe, testRecordDupe2);
-
-        healthDataService = mock(HealthDataService.class);
+        HealthDataRecord testRecord = makeRecordWithId(RECORD_ID);
+        HealthDataService healthDataService = mock(HealthDataService.class);
         when(healthDataService.getRecordById(eq(RECORD_ID))).thenReturn(testRecord);
-        when(healthDataService.getRecordsByHealthcodeCreatedOnSchemaId(any(), anyLong(), any())).thenReturn(
-                testRecordDupeListNormal);
 
         // Set up context
         Study study = TestUtils.getValidStudy(UploadValidationTaskTest.class);
@@ -207,69 +185,6 @@ public class UploadValidationTaskTest {
         verify(task).logWriteValidationStatusException(UploadStatus.SUCCEEDED, toThrow);
     }
 
-    @Test
-    public void dedupeNullRecordId() {
-        // set up validation task
-        task.setHandlerList(nullRecordIdHandlerList);
-
-        // execute
-        task.run();
-
-        // should have no interaction with dedupe logic
-        verify(task, times(0)).logDuplicateUploadRecords(any(), any());
-        verify(task, times(0)).logErrorMsg(any());
-    }
-
-    @Test
-    public void dedupeInformation() {
-        // execute
-        task.run();
-
-        // verify log helper was called
-        verify(task).logDuplicateUploadRecords(eq(testRecord), eq(ImmutableList.of(RECORD_ID_2)));
-    }
-
-    @Test
-    public void dedupeWithoutDuplicate() {
-        // only return one test record
-        when(healthDataService.getRecordById(any())).thenReturn(testRecord);
-        when(healthDataService.getRecordsByHealthcodeCreatedOnSchemaId(any(), anyLong(), any())).thenReturn(
-                ImmutableList.of(testRecord));
-
-        // execute
-        task.run();
-
-        // verify log helper was NOT called
-        verify(task, times(0)).logDuplicateUploadRecords(any(), any());
-    }
-
-    @Test
-    public void dedupeNullRecord() {
-        // return a null record
-        when(healthDataService.getRecordById(any())).thenReturn(null);
-        task.run();
-        verify(task, times(0)).logDuplicateUploadRecords(any(), any());
-    }
-
-    @Test
-    public void dedupeEmptyList() {
-        // return an empty list
-        when(healthDataService.getRecordById(any())).thenReturn(testRecord);
-        when(healthDataService.getRecordsByHealthcodeCreatedOnSchemaId(any(), anyLong(), any())).thenReturn(
-                ImmutableList.of());
-        task.run();
-        verify(task, times(0)).logDuplicateUploadRecords(any(), any());
-    }
-
-    @Test
-    public void dedupeMultipleDuplicates() {
-        when(healthDataService.getRecordById(any())).thenReturn(testRecord);
-        when(healthDataService.getRecordsByHealthcodeCreatedOnSchemaId(eq(HEALTH_CODE), eq(CREATED_ON), eq(SCHEMA_ID))).thenReturn(testRecordDupeListMulti);
-
-        task.run();
-        verify(task).logDuplicateUploadRecords(eq(testRecord), eq(ImmutableList.of(RECORD_ID_2, RECORD_ID_3)));
-    }
-
     // Test handler that makes its presence known only by writing a message to the validation context.
     private static class MessageHandler implements UploadValidationHandler {
         private final String message;
@@ -299,7 +214,8 @@ public class UploadValidationTaskTest {
         }
     }
 
-    private static HealthDataRecord makeRecordWithId(String recordId) throws IOException {
+    private static HealthDataRecord makeRecordWithId(@SuppressWarnings("SameParameterValue") String recordId)
+            throws IOException {
         HealthDataRecord record = HealthDataRecord.create();
         record.setCreatedOn(CREATED_ON);
         record.setHealthCode(HEALTH_CODE);
