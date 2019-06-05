@@ -95,19 +95,17 @@ public class SchedulePlanService {
         // Plan must always be in user's study
         plan.setStudyKey(study.getIdentifier());
         
-        // Verify that all GUIDs that are supplied already exist in the plan. If they don't (or GUID is null),
-        // then add a new GUID.
-        SchedulePlan existing = schedulePlanDao.getSchedulePlan(study, plan.getGuid());
-        Set<String> existingGuids = getAllActivityGuids(existing);
-        
         // This can happen if the submission is invalid, we want to proceed to validation
         if (plan.getStrategy() != null) {
+            // Verify that all GUIDs that are supplied already exist in the plan. If they don't (or GUID is null),
+            // then add a new GUID.
+            SchedulePlan existing = schedulePlanDao.getSchedulePlan(study, plan.getGuid());
+            Set<String> existingGuids = getAllActivityGuids(existing);
             List<Schedule> schedules = plan.getStrategy().getAllPossibleSchedules();
             for (Schedule schedule : schedules) {
                 for (int i=0; i < schedule.getActivities().size(); i++) {
                     Activity activity = schedule.getActivities().get(i);
                     if (activity.getGuid() == null || !existingGuids.contains(activity.getGuid())) {
-                        
                         Activity activityWithGuid = new Activity.Builder().withActivity(activity)
                                 .withGuid(BridgeUtils.generateGuid()).build();
                         schedule.getActivities().set(i, activityWithGuid);

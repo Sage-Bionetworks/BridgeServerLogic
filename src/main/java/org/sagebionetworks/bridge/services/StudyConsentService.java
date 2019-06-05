@@ -30,6 +30,7 @@ import org.jsoup.nodes.Entities.EscapeMode;
 
 import org.sagebionetworks.bridge.BridgeConstants;
 import org.sagebionetworks.bridge.BridgeUtils;
+import org.sagebionetworks.bridge.config.BridgeConfig;
 import org.sagebionetworks.bridge.config.BridgeConfigFactory;
 import org.sagebionetworks.bridge.dao.StudyConsentDao;
 import org.sagebionetworks.bridge.exceptions.BridgeServiceException;
@@ -72,8 +73,8 @@ public class StudyConsentService {
     private SubpopulationService subpopService;
     private AmazonS3Client s3Client;
     private S3Helper s3Helper;
-    static final String CONSENTS_BUCKET = BridgeConfigFactory.getConfig().getConsentsBucket();
-    static final String PUBLICATIONS_BUCKET = BridgeConfigFactory.getConfig().getHostnameWithPostfix("docs");
+    private String consentsBucket = BridgeConfigFactory.getConfig().getConsentsBucket();
+    private String publicationsBucket = BridgeConfigFactory.getConfig().getHostnameWithPostfix("docs");
     private String fullPageTemplate;
     
     @Value("classpath:conf/study-defaults/consent-unsigned-page.xhtml")
@@ -91,6 +92,11 @@ public class StudyConsentService {
     @Autowired
     final void setSubpopulationService(SubpopulationService subpopService) {
         this.subpopService = subpopService;
+    }
+    @Autowired
+    final void setBridgeConfig(BridgeConfig bridgeConfig) {
+        this.consentsBucket = bridgeConfig.getConsentsBucket();
+        this.publicationsBucket = bridgeConfig.getHostnameWithPostfix("docs");
     }
     /**
      * S3 client. We need to use the S3 client to call writeBytesToPublicS3(), which wasn't migrated to bridge-base
@@ -125,11 +131,11 @@ public class StudyConsentService {
 
         long createdOn = DateUtils.getCurrentMillisFromEpoch();
         String storagePath = subpopGuid.getGuid() + "." + createdOn;
-        logger.info("Accessing bucket: " + CONSENTS_BUCKET + " with storagePath: " + storagePath);
+        logger.info("Accessing bucket: " + consentsBucket + " with storagePath: " + storagePath);
         try {
             Stopwatch stopwatch = Stopwatch.createStarted();
-            s3Helper.writeBytesToS3(CONSENTS_BUCKET, storagePath, sanitizedContent.getBytes());
-            logger.info("Finished writing consent to bucket " + CONSENTS_BUCKET + " storagePath " + storagePath +
+            s3Helper.writeBytesToS3(consentsBucket, storagePath, sanitizedContent.getBytes());
+            logger.info("Finished writing consent to bucket " + consentsBucket + " storagePath " + storagePath +
                     " (" + sanitizedContent.length() + " chars) in " + stopwatch.elapsed(TimeUnit.MILLISECONDS) +
                     " ms");
 
@@ -148,12 +154,12 @@ public class StudyConsentService {
         List<StudyConsent> consentList = getAllConsents(subpopulationGuid);
         for (StudyConsent consent : consentList) {
             studyConsentDao.deleteConsentPermanently(consent);
-            s3Client.deleteObject(CONSENTS_BUCKET, consent.getStoragePath());
+            s3Client.deleteObject(consentsBucket, consent.getStoragePath());
         }
 
         // We need to delete from the publications bucket.
-        s3Client.deleteObject(PUBLICATIONS_BUCKET, subpopulationGuid.getGuid() + CONSENT_HTML_SUFFIX);
-        s3Client.deleteObject(PUBLICATIONS_BUCKET, subpopulationGuid.getGuid() + CONSENT_PDF_SUFFIX);
+        s3Client.deleteObject(publicationsBucket, subpopulationGuid.getGuid() + CONSENT_HTML_SUFFIX);
+        s3Client.deleteObject(publicationsBucket, subpopulationGuid.getGuid() + CONSENT_PDF_SUFFIX);
     }
 
     /**
@@ -260,8 +266,8 @@ public class StudyConsentService {
     private String loadDocumentContent(StudyConsent consent) {
         try {
             Stopwatch stopwatch = Stopwatch.createStarted();
-            String content = s3Helper.readS3FileAsString(CONSENTS_BUCKET, consent.getStoragePath());
-            logger.info("Finished reading consent from bucket " + CONSENTS_BUCKET + " storagePath " +
+            String content = s3Helper.readS3FileAsString(consentsBucket, consent.getStoragePath());
+            logger.info("Finished reading consent from bucket " + consentsBucket + " storagePath " +
                     consent.getStoragePath() + " (" + content.length() + " chars) in " +
                     stopwatch.elapsed(TimeUnit.MILLISECONDS) + " ms");
             return content;
@@ -288,7 +294,7 @@ public class StudyConsentService {
 
         String key = subpopGuid.getGuid() + CONSENT_HTML_SUFFIX;
         byte[] bytes = resolvedHTML.getBytes(Charset.forName(("UTF-8")));
-        writeBytesToPublicS3(PUBLICATIONS_BUCKET, key, bytes, MimeType.HTML);
+        writeBytesToPublicS3(publicationsBucket, key, bytes, MimeType.HTML);
         
         // Now create and post a PDF version !
         try (ByteArrayBuilder buffer = new ByteArrayBuilder()) {
@@ -299,7 +305,7 @@ public class StudyConsentService {
             buffer.flush();
 
             key = subpopGuid.getGuid() + CONSENT_PDF_SUFFIX;
-            writeBytesToPublicS3(PUBLICATIONS_BUCKET, key, buffer.toByteArray(), MimeType.PDF);
+            writeBytesToPublicS3(publicationsBucket, key, buffer.toByteArray(), MimeType.PDF);
         }
     }
 
@@ -307,7 +313,7 @@ public class StudyConsentService {
      * Write the byte array to a bucket at S3. The bucket will be given world read privileges, and the request
      * will be returned with the appropriate content type header for the document's MimeType.
      */
-    private void writeBytesToPublicS3(@Nonnull String bucket, @Nonnull String key, @Nonnull byte[] data,
+    void writeBytesToPublicS3(@Nonnull String bucket, @Nonnull String key, @Nonnull byte[] data,
             @Nonnull MimeType type) throws IOException {
         try (InputStream dataInputStream = new ByteArrayInputStream(data)) {
             ObjectMetadata metadata = new ObjectMetadata();

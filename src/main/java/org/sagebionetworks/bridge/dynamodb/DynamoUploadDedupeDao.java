@@ -17,7 +17,7 @@ import org.sagebionetworks.bridge.dao.UploadDedupeDao;
 /** DDB implementation of UploadDedupeDao. */
 @Component
 public class DynamoUploadDedupeDao implements UploadDedupeDao {
-    private static final int NUM_DAYS_BEFORE = 7;
+    static final int NUM_DAYS_BEFORE = 7;
 
     private DynamoDBMapper mapper;
 

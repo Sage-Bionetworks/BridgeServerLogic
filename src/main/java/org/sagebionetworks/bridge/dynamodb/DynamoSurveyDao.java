@@ -81,27 +81,6 @@ public class DynamoSurveyDao implements SurveyDao {
             return this;
         }
         
-        int getCount() {
-            DynamoSurvey key = new DynamoSurvey();
-            key.setGuid(surveyGuid);
-            DynamoDBQueryExpression<DynamoSurvey> query = new DynamoDBQueryExpression<DynamoSurvey>();
-            query.withScanIndexForward(false);
-            query.withHashKeyValues(key);    
-            if (studyIdentifier != null) {
-                query.withQueryFilterEntry(STUDY_KEY_PROPERTY, equalsString(studyIdentifier));
-            }
-            if (createdOn != 0L) {
-                query.withRangeKeyCondition(CREATED_ON_PROPERTY, equalsNumber(Long.toString(createdOn)));
-            }
-            if (published) {
-                query.withQueryFilterEntry(PUBLISHED_PROPERTY, equalsNumber("1"));
-            }
-            if (notDeleted) {
-                query.withQueryFilterEntry(DELETED_PROPERTY, equalsNumber("0"));
-            }
-            return surveyMapper.queryPage(DynamoSurvey.class, query).getCount();
-        }
-        
         List<Survey> getAll() {
             List<DynamoSurvey> dynamoSurveys = null;
             if (surveyGuid == null) {
@@ -237,12 +216,16 @@ public class DynamoSurveyDao implements SurveyDao {
     public final void setUploadSchemaService(UploadSchemaService uploadSchemaService) {
         this.uploadSchemaService = uploadSchemaService;
     }
+    
+    String generateGuid() {
+        return BridgeUtils.generateGuid();
+    }
 
     @Override
     public Survey createSurvey(Survey survey) {
         checkNotNull(survey.getStudyIdentifier(), "Survey study identifier is null");
         if (survey.getGuid() == null) {
-            survey.setGuid(BridgeUtils.generateGuid());
+            survey.setGuid(generateGuid());
         }
         long time = DateUtils.getCurrentMillisFromEpoch();
         survey.setCreatedOn(time);
@@ -308,7 +291,7 @@ public class DynamoSurveyDao implements SurveyDao {
         copy.setModifiedOn(time);
         copy.setSchemaRevision(null);
         for (SurveyElement element : copy.getElements()) {
-            element.setGuid(BridgeUtils.generateGuid());
+            element.setGuid(generateGuid());
         }
         return saveSurvey(copy);
     }
@@ -435,7 +418,7 @@ public class DynamoSurveyDao implements SurveyDao {
             element.setSurveyKeyComponents(survey.getGuid(), survey.getCreatedOn());
             element.setOrder(i);
             if (element.getGuid() == null) {
-                element.setGuid(BridgeUtils.generateGuid());
+                element.setGuid(generateGuid());
             }
             reconcileRules(element);
             dynamoElements.add((DynamoSurveyElement)element);

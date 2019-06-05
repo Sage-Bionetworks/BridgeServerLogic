@@ -9,12 +9,15 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.fail;
 
 import java.util.Map;
 import java.util.Set;
 
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.testng.annotations.AfterMethod;
@@ -28,6 +31,7 @@ import org.sagebionetworks.bridge.TestConstants;
 import org.sagebionetworks.bridge.TestUtils;
 import org.sagebionetworks.bridge.cache.CacheProvider;
 import org.sagebionetworks.bridge.dao.AccountDao;
+import org.sagebionetworks.bridge.exceptions.ConsentRequiredException;
 import org.sagebionetworks.bridge.exceptions.InvalidEntityException;
 import org.sagebionetworks.bridge.models.CriteriaContext;
 import org.sagebionetworks.bridge.models.accounts.Account;
@@ -42,11 +46,14 @@ import org.sagebionetworks.bridge.models.studies.Study;
 import org.sagebionetworks.bridge.models.subpopulations.SubpopulationGuid;
 import org.sagebionetworks.bridge.models.substudies.AccountSubstudy;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 
 public class UserAdminServiceMockTest {
     
+    private static final String USER_ID = "ABC";
+
     @Mock
     private AuthenticationService authenticationService;
 
@@ -92,6 +99,7 @@ public class UserAdminServiceMockTest {
     @Captor
     private ArgumentCaptor<Account> accountCaptor;
 
+    @InjectMocks
     private UserAdminService service;
     
     private Map<SubpopulationGuid,ConsentStatus> statuses;
@@ -100,19 +108,6 @@ public class UserAdminServiceMockTest {
     public void before() {
         MockitoAnnotations.initMocks(this);
         
-        service = new UserAdminService();
-        service.setAuthenticationService(authenticationService);
-        service.setConsentService(consentService);
-        service.setNotificationsService(notificationsService);
-        service.setParticipantService(participantService);
-        service.setUploadService(uploadService);
-        service.setAccountDao(accountDao);
-        service.setCacheProvider(cacheProvider);
-        service.setHealthDataService(healthDataService);
-        service.setScheduledActivityService(scheduledActivityService);
-        service.setActivityEventService(activityEventService);
-        service.setExternalIdService(externalIdService);
-
         // Make a user with multiple consent statuses, and just verify that we call the 
         // consent service that many times.
         statuses = Maps.newHashMap();
@@ -125,9 +120,9 @@ public class UserAdminServiceMockTest {
         
         when(authenticationService.signIn(any(), any(), any())).thenReturn(session);
         
-        doReturn(new IdentifierHolder("ABC")).when(participantService).createParticipant(any(), any(),
+        doReturn(new IdentifierHolder(USER_ID)).when(participantService).createParticipant(any(), any(),
                 anyBoolean());
-        doReturn(new StudyParticipant.Builder().withId("ABC").build()).when(participantService).getParticipant(any(),
+        doReturn(new StudyParticipant.Builder().withId(USER_ID).build()).when(participantService).getParticipant(any(),
                 anyString(), anyBoolean());
     }
     
@@ -232,6 +227,87 @@ public class UserAdminServiceMockTest {
     }
     
     @Test
+    public void createUserWithoutConsents() {
+        BridgeUtils.setRequestContext(new RequestContext.Builder().withCallerRoles(
+                ImmutableSet.of(Roles.ADMIN)).build());
+                
+        Study study = TestUtils.getValidStudy(UserAdminServiceMockTest.class);
+        StudyParticipant participant = new StudyParticipant.Builder().withEmail("email@email.com").withPassword("password").build();
+        SubpopulationGuid consentedGuid = statuses.keySet().iterator().next();
+
+        service.createUser(study, participant, consentedGuid, true, false);
+        
+        verify(consentService, never()).consentToResearch(any(), any(), any(), any(), any(), anyBoolean());
+    }
+    
+    @Test
+    public void createUserWithoutSigningIn() {
+        BridgeUtils.setRequestContext(new RequestContext.Builder().withCallerRoles(
+                ImmutableSet.of(Roles.ADMIN)).build());
+        
+        Study study = TestUtils.getValidStudy(UserAdminServiceMockTest.class);
+        StudyParticipant participant = new StudyParticipant.Builder().withEmail("email@email.com").withPassword("password").build();
+        
+        when(consentService.getConsentStatuses(any())).thenReturn(ImmutableMap.of());
+        
+        UserSession session = new UserSession(participant);
+        when(authenticationService.getSession(eq(study), any())).thenReturn(session);
+        
+        service.createUser(study, participant, null, false, true);
+        
+        verify(authenticationService, never()).signIn(any(), any(), any());
+        verify(authenticationService).getSession(eq(study), contextCaptor.capture());
+        
+        CriteriaContext context = contextCaptor.getValue();
+        assertEquals(context.getStudyIdentifier(), study.getStudyIdentifier());
+        assertEquals(context.getAccountId().getId(), USER_ID);
+    }
+    
+    @Test
+    public void createUserNotConsented() {
+        BridgeUtils.setRequestContext(new RequestContext.Builder().withCallerRoles(
+                ImmutableSet.of(Roles.ADMIN)).build());
+        
+        Study study = TestUtils.getValidStudy(UserAdminServiceMockTest.class);
+        StudyParticipant participant = new StudyParticipant.Builder().withEmail("email@email.com").withPassword("password").build();
+        
+        when(authenticationService.signIn(eq(study), any(), any()))
+                .thenThrow(new ConsentRequiredException(new UserSession(participant)));
+        
+        // specifically do not ask to sign these required consents. Should not throw ConsentRequiredException, 
+        // but should return the session from that exception.
+        UserSession session = service.createUser(study, participant, null, true, false);
+        assertNotNull(session);
+    }
+    
+    @Test
+    public void createUserOnRuntimeExceptionCleansUpUser() {
+        BridgeUtils.setRequestContext(new RequestContext.Builder().withCallerRoles(
+                ImmutableSet.of(Roles.ADMIN)).build());
+        
+        Study study = TestUtils.getValidStudy(UserAdminServiceMockTest.class);
+        StudyParticipant participant = new StudyParticipant.Builder().withEmail("email@email.com").withPassword("password").build();
+        
+        Map<SubpopulationGuid,ConsentStatus> statuses = Maps.newHashMap();
+        statuses.put(SubpopulationGuid.create("foo1"), TestConstants.REQUIRED_SIGNED_CURRENT);
+        statuses.put(SubpopulationGuid.create("foo2"), TestConstants.REQUIRED_SIGNED_OBSOLETE);
+        when(consentService.getConsentStatuses(any())).thenReturn(statuses);
+        
+        AccountId accountId = AccountId.forId(study.getIdentifier(), USER_ID);
+        when(accountDao.getAccount(accountId)).thenReturn(account);
+        
+        when(participantService.getParticipant(study, USER_ID, false))
+                .thenThrow(new IllegalStateException("System is unable to complete call"));        
+        
+        try {
+            service.createUser(study, participant, null, true, true);    
+            fail("Should have thrown exception");
+        } catch(IllegalStateException e) {
+            verify(accountDao).deleteAccount(accountId);
+        }
+    }
+    
+    @Test
     public void deleteUser() {
         Study study = TestUtils.getValidStudy(UserAdminServiceMockTest.class);
         
@@ -267,4 +343,21 @@ public class UserAdminServiceMockTest {
         assertEquals(accountCaptor.getValue().getHealthCode(), "healthCode");
     }
     
+    @Test
+    public void deleteUserNotFound() {
+        Study study = TestUtils.getValidStudy(UserAdminServiceMockTest.class);
+        
+        service.deleteUser(study, "userId");
+        
+        // (it very quietly does nothing)
+        verify(cacheProvider, never()).removeSessionByUserId(any());
+        verify(cacheProvider, never()).removeRequestInfo(any());
+        verify(healthDataService, never()).deleteRecordsForHealthCode(any());
+        verify(notificationsService, never()).deleteAllRegistrations(any(), any());
+        verify(uploadService, never()).deleteUploadsForHealthCode(any());
+        verify(scheduledActivityService, never()).deleteActivitiesForUser(any());
+        verify(activityEventService, never()).deleteActivityEvents(any());
+        verify(externalIdService, never()).unassignExternalId(any(), any());
+        verify(accountDao, never()).deleteAccount(any());
+    }
 }

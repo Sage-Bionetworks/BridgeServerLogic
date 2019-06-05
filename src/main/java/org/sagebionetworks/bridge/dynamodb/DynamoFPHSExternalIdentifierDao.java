@@ -25,7 +25,7 @@ import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBScanExpression;
 
 @Component
 public class DynamoFPHSExternalIdentifierDao implements FPHSExternalIdentifierDao {
-    private static final String CONFIG_KEY_ADD_LIMIT = "fphs.id.add.limit";
+    static final String CONFIG_KEY_ADD_LIMIT = "fphs.id.add.limit";
 
     private int addLimit;
     private DynamoDBMapper mapper;

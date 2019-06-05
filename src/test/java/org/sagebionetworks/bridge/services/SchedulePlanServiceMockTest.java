@@ -12,6 +12,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.fail;
 
 import java.util.List;
@@ -60,8 +61,8 @@ public class SchedulePlanServiceMockTest {
     public void before() {
         study = new DynamoStudy();
         study.setIdentifier(TEST_STUDY_IDENTIFIER);
-        study.setTaskIdentifiers(Sets.newHashSet("tapTest", "taskGuid", "CCC"));
-        study.setDataGroups(Sets.newHashSet("AAA"));
+        study.setTaskIdentifiers(ImmutableSet.of("tapTest", "taskGuid", "CCC"));
+        study.setDataGroups(ImmutableSet.of("AAA"));
         
         mockSchedulePlanDao = mock(SchedulePlanDao.class);
         mockSurveyService = mock(SurveyService.class);
@@ -83,9 +84,40 @@ public class SchedulePlanServiceMockTest {
         
     }
     
+    @Test(expectedExceptions = InvalidEntityException.class)
+    public void createSchedulePlanWithoutStrategy() {
+        SchedulePlan schedulePlan = constructSchedulePlan();
+        schedulePlan.setStrategy(null);
+
+        // The key thing here is that we make it to validation.
+        service.createSchedulePlan(study, schedulePlan);
+    }
+    
+    @Test(expectedExceptions = InvalidEntityException.class)
+    public void updateSchedulePlanWithoutStrategy() {
+        SchedulePlan schedulePlan = constructSchedulePlan();
+        schedulePlan.setStrategy(null);
+        
+        when(mockSchedulePlanDao.getSchedulePlan(eq(TEST_STUDY), any())).thenReturn(schedulePlan);
+        
+        // The key thing here is that we make it to validation.
+        service.updateSchedulePlan(study, schedulePlan);
+    }
+    
+    @Test
+    public void getSchedulePlan() {
+        SchedulePlan schedulePlan = SchedulePlan.create();
+        when(mockSchedulePlanDao.getSchedulePlan(TEST_STUDY, "oneGuid")).thenReturn(schedulePlan);
+        
+        SchedulePlan result = service.getSchedulePlan(TEST_STUDY, "oneGuid");
+        assertSame(result, schedulePlan);
+        
+        verify(mockSchedulePlanDao).getSchedulePlan(TEST_STUDY, "oneGuid");
+    }
+    
     @Test
     public void surveyReferenceIdentifierFilledOutOnCreate() {
-        SchedulePlan plan = createSchedulePlan();
+        SchedulePlan plan = constructSchedulePlan();
         
         ArgumentCaptor<SchedulePlan> spCaptor = ArgumentCaptor.forClass(SchedulePlan.class);
         
@@ -102,7 +134,7 @@ public class SchedulePlanServiceMockTest {
     
     @Test
     public void surveyReferenceIdentifierFilledOutOnUpdate() {
-        SchedulePlan plan = createSchedulePlan();
+        SchedulePlan plan = constructSchedulePlan();
         
         ArgumentCaptor<SchedulePlan> spCaptor = ArgumentCaptor.forClass(SchedulePlan.class);
         when(mockSchedulePlanDao.getSchedulePlan(study, plan.getGuid())).thenReturn(plan);
@@ -126,7 +158,7 @@ public class SchedulePlanServiceMockTest {
         // mismatched by the client, so ignore it and look it up from the DB using the primary keys.
         Activity activity = new Activity.Builder().withGuid("guid").withLabel("A survey activity")
                 .withPublishedSurvey("junkIdentifier", surveyGuid1).build();
-        SchedulePlan plan = createSchedulePlan();
+        SchedulePlan plan = constructSchedulePlan();
         plan.getStrategy().getAllPossibleSchedules().get(0).getActivities().set(0, activity);
         
         when(mockSchedulePlanDao.getSchedulePlan(study, plan.getGuid())).thenReturn(plan);
@@ -154,7 +186,7 @@ public class SchedulePlanServiceMockTest {
     
     @Test
     public void verifyCreateDoesNotUseProvidedGUIDs() throws Exception {
-        SchedulePlan plan = createSchedulePlan();
+        SchedulePlan plan = constructSchedulePlan();
         plan.setVersion(2L);
         plan.setGuid("AAA");
         Set<String> existingActivityGUIDs = Sets.newHashSet();
@@ -182,7 +214,7 @@ public class SchedulePlanServiceMockTest {
     @Test
     public void schedulePlanSetsStudyIdentifierOnCreate() {
         DynamoStudy anotherStudy = getAnotherStudy();
-        SchedulePlan plan = getSchedulePlan();
+        SchedulePlan plan = constructSimpleSchedulePlan();
         // Just pass it back, the service should set the studyKey
         when(mockSchedulePlanDao.createSchedulePlan(any(), any())).thenReturn(plan);
         
@@ -193,7 +225,7 @@ public class SchedulePlanServiceMockTest {
     @Test
     public void schedulePlanSetsStudyIdentifierOnUpdate() {
         DynamoStudy anotherStudy = getAnotherStudy();
-        SchedulePlan plan = getSchedulePlan();
+        SchedulePlan plan = constructSimpleSchedulePlan();
         // Just pass it back, the service should set the studyKey
         when(mockSchedulePlanDao.getSchedulePlan(anotherStudy, plan.getGuid())).thenReturn(plan);
         when(mockSchedulePlanDao.updateSchedulePlan(any(), any())).thenReturn(plan);
@@ -205,14 +237,14 @@ public class SchedulePlanServiceMockTest {
     @Test
     public void validatesOnCreate() {
         // Check that 1) validation is called and 2) the study's enumerations are used in the validation
-        SchedulePlan plan = createInvalidSchedulePlan();
+        SchedulePlan plan = constructorInvalidSchedulePlan();
         try {
             service.createSchedulePlan(study, plan);
             fail("Should have thrown exception");
         } catch(InvalidEntityException e) {
             assertEquals(
                     e.getErrors().get("strategy.scheduleCriteria[0].schedule.activities[0].task.identifier").get(0),
-                    "strategy.scheduleCriteria[0].schedule.activities[0].task.identifier 'DDD' is not in enumeration: taskGuid, CCC, tapTest");
+                    "strategy.scheduleCriteria[0].schedule.activities[0].task.identifier 'DDD' is not in enumeration: tapTest, taskGuid, CCC");
             assertEquals(e.getErrors().get("strategy.scheduleCriteria[0].criteria.allOfGroups").get(0),
                     "strategy.scheduleCriteria[0].criteria.allOfGroups 'FFF' is not in enumeration: AAA");
             assertEquals(e.getErrors().get("strategy.scheduleCriteria[0].criteria.noneOfSubstudyIds").get(0),
@@ -223,7 +255,7 @@ public class SchedulePlanServiceMockTest {
     @Test
     public void validatesOnUpdate() {
         // Check that 1) validation is called and 2) the study's enumerations are used in the validation
-        SchedulePlan plan = createInvalidSchedulePlan();
+        SchedulePlan plan = constructorInvalidSchedulePlan();
         when(mockSchedulePlanDao.getSchedulePlan(study, plan.getGuid())).thenReturn(plan);
         try {
             service.updateSchedulePlan(study, plan);
@@ -231,7 +263,7 @@ public class SchedulePlanServiceMockTest {
         } catch(InvalidEntityException e) {
             assertEquals(
                     e.getErrors().get("strategy.scheduleCriteria[0].schedule.activities[0].task.identifier").get(0),
-                    "strategy.scheduleCriteria[0].schedule.activities[0].task.identifier 'DDD' is not in enumeration: taskGuid, CCC, tapTest");
+                    "strategy.scheduleCriteria[0].schedule.activities[0].task.identifier 'DDD' is not in enumeration: tapTest, taskGuid, CCC");
             assertEquals(e.getErrors().get("strategy.scheduleCriteria[0].criteria.allOfGroups").get(0),
                     "strategy.scheduleCriteria[0].criteria.allOfGroups 'FFF' is not in enumeration: AAA");
             assertEquals(e.getErrors().get("strategy.scheduleCriteria[0].criteria.noneOfSubstudyIds").get(0),
@@ -275,7 +307,7 @@ public class SchedulePlanServiceMockTest {
         verify(mockSchedulePlanDao).deleteSchedulePlanPermanently(TEST_STUDY, "planGuid");
     }
     
-    private SchedulePlan createInvalidSchedulePlan() {
+    private SchedulePlan constructorInvalidSchedulePlan() {
         Schedule schedule = new Schedule();
         schedule.addActivity(new Activity.Builder().withTask("DDD").build());
         
@@ -298,7 +330,7 @@ public class SchedulePlanServiceMockTest {
         return anotherStudy;
     }
     
-    private SchedulePlan getSchedulePlan() {
+    private SchedulePlan constructSimpleSchedulePlan() {
         SchedulePlan plan = TestUtils.getSimpleSchedulePlan(TEST_STUDY);
         plan.setLabel("Label");
         plan.setGuid("BBB");
@@ -306,15 +338,17 @@ public class SchedulePlanServiceMockTest {
         return plan;
     }
     
-    private SchedulePlan createSchedulePlan() {
+    private SchedulePlan constructSchedulePlan() {
         Schedule schedule = new Schedule();
         schedule.setScheduleType(ScheduleType.ONCE);
         // No identifier, which is the key here. This is valid, but we fill it out during saves as a convenience 
         // for the client. No longer required in the API.
         // Create a schedule plan with 3 activities to verify all activities are processed.
-        schedule.addActivity(new Activity.Builder().withGuid("A").withLabel("Activity 1").withPublishedSurvey(null, surveyGuid1).build());
+        schedule.addActivity(new Activity.Builder().withGuid("A").withLabel("Activity 1")
+                .withPublishedSurvey(null, surveyGuid1).build());
         schedule.addActivity(new Activity.Builder().withGuid("B").withLabel("Activity 2").withTask("taskGuid").build());
-        schedule.addActivity(new Activity.Builder().withGuid("C").withLabel("Activity 3").withSurvey(null, surveyGuid2, DateTime.now()).build());
+        schedule.addActivity(new Activity.Builder().withGuid("C").withLabel("Activity 3")
+                .withSurvey(null, surveyGuid2, DateTime.now()).build());
         
         SimpleScheduleStrategy strategy = new SimpleScheduleStrategy();
         strategy.setSchedule(schedule);

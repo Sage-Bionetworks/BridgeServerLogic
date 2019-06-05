@@ -88,6 +88,7 @@ public class StudyService {
     private static final Logger LOG = LoggerFactory.getLogger(StudyService.class);
 
     private static final String BASE_URL = BridgeConfigFactory.getConfig().get("webservices.url");
+    static final String CONFIG_STUDY_WHITELIST = "study.whitelist";
     static final String CONFIG_KEY_SUPPORT_EMAIL_PLAIN = "support.email.plain";
     static final String CONFIG_KEY_TEAM_BRIDGE_ADMIN = "team.bridge.admin";
     static final String CONFIG_KEY_TEAM_BRIDGE_STAFF = "team.bridge.staff";
@@ -100,10 +101,9 @@ public class StudyService {
     private static final String STUDY_EMAIL_VERIFICATION_URL = "studyEmailVerificationUrl";
     private static final String STUDY_EMAIL_VERIFICATION_EXPIRATION_PERIOD = "studyEmailVerificationExpirationPeriod";
     private static final String IDENTIFIER_PROPERTY = "identifier";
-    private final Set<String> studyWhitelist = Collections.unmodifiableSet(new HashSet<>(
-            BridgeConfigFactory.getConfig().getPropertyAsList("study.whitelist")));
     public static final Set<ACCESS_TYPE> READ_DOWNLOAD_ACCESS = ImmutableSet.of(ACCESS_TYPE.READ, ACCESS_TYPE.DOWNLOAD);
 
+    private Set<String> studyWhitelist;
     private String bridgeSupportEmailPlain;
     private String bridgeAdminTeamId;
     private String bridgeStaffTeamId;
@@ -234,6 +234,8 @@ public class StudyService {
         this.bridgeSupportEmailPlain = bridgeConfig.get(CONFIG_KEY_SUPPORT_EMAIL_PLAIN);
         this.bridgeAdminTeamId = bridgeConfig.get(CONFIG_KEY_TEAM_BRIDGE_ADMIN);
         this.bridgeStaffTeamId = bridgeConfig.get(CONFIG_KEY_TEAM_BRIDGE_STAFF);
+        this.studyWhitelist = Collections.unmodifiableSet(new HashSet<>(
+                bridgeConfig.getPropertyAsList(CONFIG_STUDY_WHITELIST)));
     }
 
     /** Compound activity definition service, used to clean up deleted studies. This is set by Spring. */

@@ -21,7 +21,8 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 
 public class TestConstants {
-    
+
+    public static final String HEALTH_CODE = "oneHealthCode";
     public static final String ENCRYPTED_HEALTH_CODE = "TFMkaVFKPD48WissX0bgcD3esBMEshxb3MVgKxHnkXLSEPN4FQMKc01tDbBAVcXx94kMX6ckXVYUZ8wx4iICl08uE+oQr9gorE1hlgAyLAM=";
     public static final String UNENCRYPTED_HEALTH_CODE = "5a2192ee-f55d-4d01-a385-2d19f15a0880";
     

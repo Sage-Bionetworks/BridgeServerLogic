@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.sagebionetworks.bridge.TestConstants.TEST_STUDY;
+import static org.sagebionetworks.bridge.TestConstants.TEST_STUDY_IDENTIFIER;
 import static org.sagebionetworks.bridge.services.SharedModuleMetadataServiceTest.makeValidMetadata;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import org.joda.time.DateTime;
 import org.mockito.ArgumentCaptor;
@@ -32,11 +34,13 @@ import org.mockito.MockitoAnnotations;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+import org.sagebionetworks.bridge.BridgeUtils;
 import org.sagebionetworks.bridge.TestConstants;
 import org.sagebionetworks.bridge.TestUtils;
 import org.sagebionetworks.bridge.dao.SurveyDao;
 import org.sagebionetworks.bridge.dynamodb.DynamoSchedulePlan;
 import org.sagebionetworks.bridge.dynamodb.DynamoSurvey;
+import org.sagebionetworks.bridge.dynamodb.DynamoSurveyQuestion;
 import org.sagebionetworks.bridge.exceptions.BadRequestException;
 import org.sagebionetworks.bridge.exceptions.ConstraintViolationException;
 import org.sagebionetworks.bridge.exceptions.EntityAlreadyExistsException;
@@ -52,12 +56,18 @@ import org.sagebionetworks.bridge.models.schedules.Schedule;
 import org.sagebionetworks.bridge.models.schedules.SchedulePlan;
 import org.sagebionetworks.bridge.models.schedules.SimpleScheduleStrategy;
 import org.sagebionetworks.bridge.models.schedules.SurveyReference;
+import org.sagebionetworks.bridge.models.studies.Study;
 import org.sagebionetworks.bridge.models.studies.StudyIdentifier;
 import org.sagebionetworks.bridge.models.studies.StudyIdentifierImpl;
+import org.sagebionetworks.bridge.models.surveys.BloodPressureConstraints;
 import org.sagebionetworks.bridge.models.surveys.Survey;
 import org.sagebionetworks.bridge.models.surveys.SurveyElement;
 import org.sagebionetworks.bridge.models.surveys.SurveyInfoScreen;
+import org.sagebionetworks.bridge.models.surveys.SurveyQuestion;
+import org.sagebionetworks.bridge.models.surveys.SurveyRule;
+import org.sagebionetworks.bridge.models.surveys.SurveyRule.Operator;
 import org.sagebionetworks.bridge.models.surveys.TestSurvey;
+import org.sagebionetworks.bridge.models.surveys.UIHint;
 import org.sagebionetworks.bridge.validators.SurveyPublishValidator;
 
 public class SurveyServiceMockTest {
@@ -98,12 +108,14 @@ public class SurveyServiceMockTest {
     
     SurveyService service;
     
+    Study study;
+    
     @BeforeMethod
     public void before() {
         MockitoAnnotations.initMocks(this);
         // Mock dependencies.
-        when(mockStudyService.getStudy(TestConstants.TEST_STUDY_IDENTIFIER)).thenReturn(TestUtils.getValidStudy(
-                SurveyServiceMockTest.class));
+        study = TestUtils.getValidStudy(SurveyServiceMockTest.class);
+        when(mockStudyService.getStudy(TestConstants.TEST_STUDY_IDENTIFIER)).thenReturn(study);
 
         when(mockSurveyDao.createSurvey(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -134,7 +146,7 @@ public class SurveyServiceMockTest {
         // Verify DAO.
         verify(mockSurveyDao).createSurvey(survey);
     }
-
+    
     @Test(expectedExceptions = InvalidEntityException.class)
     public void createSurvey_InvalidSurvey() {
         // Create invalid survey. A survey without an identifier is invalid.
@@ -189,6 +201,52 @@ public class SurveyServiceMockTest {
         service.getSurveyMostRecentlyPublishedVersion(TEST_STUDY, SURVEY_GUID, false);
         
         verify(mockSurveyDao).getSurveyMostRecentlyPublishedVersion(TEST_STUDY, SURVEY_GUID, false);
+    }
+    
+    @Test
+    public void getAllSurveysMostRecentlyPublishedVersionIncludeDeleted() {
+        service.getAllSurveysMostRecentlyPublishedVersion(TEST_STUDY, true);
+        
+        verify(mockSurveyDao).getAllSurveysMostRecentlyPublishedVersion(TEST_STUDY, true);
+    }
+    
+    @Test
+    public void getAllSurveysMostRecentlyPublishedVersionExcludeDeleted() {
+        service.getAllSurveysMostRecentlyPublishedVersion(TEST_STUDY, false);
+        
+        verify(mockSurveyDao).getAllSurveysMostRecentlyPublishedVersion(TEST_STUDY, false);
+    }
+    
+    @Test
+    public void getAllSurveysMostRecentVersionIncludeDeleted() {
+        service.getAllSurveysMostRecentVersion(TEST_STUDY, true);
+        
+        verify(mockSurveyDao).getAllSurveysMostRecentVersion(TEST_STUDY, true);
+    }
+    
+    @Test
+    public void getAllSurveysMostRecentVersionExcludeDeleted() {
+        service.getAllSurveysMostRecentVersion(TEST_STUDY, false);
+        
+        verify(mockSurveyDao).getAllSurveysMostRecentVersion(TEST_STUDY, false);
+    }
+    
+    @Test(expectedExceptions = ConstraintViolationException.class, 
+            expectedExceptionsMessageRegExp = "Cannot delete survey: it is referenced by a schedule plan that is still accessible through the API")
+    public void checkConstraintsBeforePhysicalDelete() {
+        GuidCreatedOnVersionHolder surveyKeys = new GuidCreatedOnVersionHolderImpl(SURVEY_GUID,
+                SURVEY_CREATED_ON.getMillis());
+        
+        Survey existing = Survey.create();
+        existing.setPublished(true);
+        existing.setStudyIdentifier(TEST_STUDY_IDENTIFIER);
+        when(mockSurveyDao.getSurvey(surveyKeys, false)).thenReturn(existing);
+        
+        // Now create a schedule that points to this survey
+        List<SchedulePlan> plans = createSchedulePlanListWithSurveyReference(false);
+        when(mockSchedulePlanService.getSchedulePlans(ClientInfo.UNKNOWN_CLIENT, TEST_STUDY, true)).thenReturn(plans);
+        
+        service.deleteSurveyPermanently(TEST_STUDY, surveyKeys);
     }
     
     @Test
@@ -566,6 +624,42 @@ public class SurveyServiceMockTest {
         assertFalse(surveyCaptor.getValue().isDeleted());
     }
     
+    @Test
+    public void updateSurveyValidatesDataGroups() {
+        study.setDataGroups(ImmutableSet.of("groupA", "groupB", "groupC"));
+        Survey existing = Survey.create();
+        existing.setStudyIdentifier(TEST_STUDY_IDENTIFIER);
+        
+        when(mockSurveyDao.getSurvey(any(), eq(false))).thenReturn(existing);
+        when(mockSurveyDao.getSurvey(any(), eq(true))).thenReturn(existing);
+        
+        Survey update = Survey.create();
+        update.setIdentifier("surveyIdentifier");
+        update.setName("This is a survey name");
+        update.setGuid(BridgeUtils.generateGuid());
+        update.setStudyIdentifier(TEST_STUDY_IDENTIFIER);
+        
+        // Create a data group rule that includes invalid data groups
+        SurveyRule rule = new SurveyRule.Builder().withDataGroups(ImmutableSet.of("groupB", "groupdD"))
+                .withOperator(Operator.ALL).withEndSurvey(true).build();
+        SurveyQuestion element = new DynamoSurveyQuestion();
+        element.setIdentifier("anIdentifier");
+        element.setPrompt("This is a prompt.");
+        element.setConstraints(new BloodPressureConstraints());
+        element.setUiHint(UIHint.BLOODPRESSURE);
+        element.setAfterRules(ImmutableList.of(rule));
+        update.setElements(ImmutableList.of(element));
+        
+        try {
+            service.updateSurvey(TEST_STUDY, update);    
+            fail("Should have thrown an exception");
+        } catch(InvalidEntityException e) {
+            assertEquals(e.getErrors().get("elements[0].afterRules[0].dataGroups").get(0),
+                    "elements[0].afterRules[0].dataGroups contains data groups 'groupB, groupdD' "+
+                    "that are not valid data groups: groupA, groupB, groupC");
+        }
+    }
+    
     @Test(expectedExceptions = EntityNotFoundException.class)
     public void versionSurveyFailsOnDeletedSurvey() throws Exception {
         Survey survey = Survey.create();
@@ -580,7 +674,7 @@ public class SurveyServiceMockTest {
     public void versionSurveyFailsOnMissingSurvey() throws Exception {
         when(mockSurveyDao.getSurvey(any(), eq(false))).thenReturn(null);
         
-        service.versionSurvey(TestConstants.TEST_STUDY, SURVEY_KEYS);
+        service.versionSurvey(TEST_STUDY, SURVEY_KEYS);
     }
     
     @Test(expectedExceptions = EntityNotFoundException.class)
@@ -592,7 +686,7 @@ public class SurveyServiceMockTest {
     
     @Test(expectedExceptions = EntityNotFoundException.class)
     public void getSurveyAllVersionsThrowsException() {
-        service.getSurveyAllVersions(TestConstants.TEST_STUDY, "GUID", true);
+        service.getSurveyAllVersions(TEST_STUDY, "GUID", true);
     }
     
     @Test(expectedExceptions = EntityNotFoundException.class)
@@ -618,7 +712,7 @@ public class SurveyServiceMockTest {
     
     @Test(expectedExceptions = EntityNotFoundException.class)
     public void getSurveyThrowsException() {
-        service.getSurvey(TestConstants.TEST_STUDY, SURVEY_KEYS, false, true);
+        service.getSurvey(TEST_STUDY, SURVEY_KEYS, false, true);
     }
 
     @Test
@@ -737,6 +831,68 @@ public class SurveyServiceMockTest {
     @Test(expectedExceptions = EntityNotFoundException.class)
     public void getSurveyMostRecentVersionMissingSurvey() {
         service.getSurveyMostRecentVersion(OTHER_STUDY, SURVEY_GUID);    
+    }
+    
+    @Test
+    public void versionSurvey() {
+        Survey survey = Survey.create();
+        survey.setStudyIdentifier(TEST_STUDY_IDENTIFIER);
+        when(mockSurveyDao.getSurvey(SURVEY_KEYS, false)).thenReturn(survey);
+        
+        service.versionSurvey(TEST_STUDY, SURVEY_KEYS);
+        
+        verify(mockSurveyDao).getSurvey(SURVEY_KEYS, false);
+    }
+    
+    @Test(expectedExceptions = EntityNotFoundException.class)
+    public void versionSurveyNotFound() {
+        service.versionSurvey(TEST_STUDY, SURVEY_KEYS);
+    }
+
+    @Test(expectedExceptions = EntityNotFoundException.class)
+    public void versionSurveyLogicallyDeleted() {
+        Survey survey = Survey.create();
+        survey.setStudyIdentifier(TEST_STUDY_IDENTIFIER);
+        survey.setDeleted(true);
+        when(mockSurveyDao.getSurvey(SURVEY_KEYS, false)).thenReturn(survey);
+        
+        service.versionSurvey(TEST_STUDY, SURVEY_KEYS);
+    }
+    
+    @Test(expectedExceptions = EntityNotFoundException.class)
+    public void versionSurveyNotInStudy() {
+        Survey survey = Survey.create();
+        survey.setStudyIdentifier(OTHER_STUDY.getIdentifier());
+        when(mockSurveyDao.getSurvey(SURVEY_KEYS, false)).thenReturn(survey);
+        
+        service.versionSurvey(TEST_STUDY, SURVEY_KEYS);
+    }
+    
+    @Test
+    public void getSurveyAllVersionsIncludeDeleted() {
+        List<Survey> list = ImmutableList.of(Survey.create(), Survey.create());
+        when(mockSurveyDao.getSurveyAllVersions(TEST_STUDY, SURVEY_GUID, true)).thenReturn(list);
+        
+        List<Survey> results = service.getSurveyAllVersions(TEST_STUDY, SURVEY_GUID, true);
+        assertEquals(results.size(), 2);
+        
+        verify(mockSurveyDao).getSurveyAllVersions(TEST_STUDY, SURVEY_GUID, true);
+    }
+    
+    @Test
+    public void getSurveyAllVersionsExcludeDeleted() {
+        List<Survey> list = ImmutableList.of(Survey.create(), Survey.create());
+        when(mockSurveyDao.getSurveyAllVersions(TEST_STUDY, SURVEY_GUID, false)).thenReturn(list);
+        
+        List<Survey> results = service.getSurveyAllVersions(TEST_STUDY, SURVEY_GUID, false);
+        assertEquals(results.size(), 2);
+        
+        verify(mockSurveyDao).getSurveyAllVersions(TEST_STUDY, SURVEY_GUID, false);
+    }
+    
+    @Test(expectedExceptions = EntityNotFoundException.class)
+    public void getSurveyAllVersionsNotFound() {
+        service.getSurveyAllVersions(TEST_STUDY, SURVEY_GUID, false);
     }
     
     private List<Activity> getActivityList(List<SchedulePlan> plans) {

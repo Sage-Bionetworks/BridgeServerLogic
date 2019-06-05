@@ -149,6 +149,17 @@ public class DynamoCriteriaTest {
         assertTrue(criteria.getNoneOfSubstudyIds().isEmpty());
     }
     
+    @Test
+    public void originalMinMaxValuesAreMigratedToPlatformMap() {
+        DynamoCriteria criteria = new DynamoCriteria();
+        criteria.setKey("key1");
+        criteria.setMinAppVersion(1);
+        criteria.setMaxAppVersion(4);
+        
+        assertEquals(new Integer(1), criteria.getMinAppVersion(IOS));
+        assertEquals(new Integer(4), criteria.getMaxAppVersion(IOS));
+    }
+    
     private String makeJson(String string) {
         return string.replaceAll("'", "\"");
     }

@@ -1,7 +1,10 @@
 package org.sagebionetworks.bridge.services;
 
+import static com.amazonaws.services.s3.Headers.SERVER_SIDE_ENCRYPTION;
+import static com.amazonaws.services.s3.model.ObjectMetadata.AES_256_SERVER_SIDE_ENCRYPTION;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -10,32 +13,63 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 import static org.sagebionetworks.bridge.BridgeConstants.API_DEFAULT_PAGE_SIZE;
 import static org.sagebionetworks.bridge.BridgeConstants.API_MAXIMUM_PAGE_SIZE;
+import static org.sagebionetworks.bridge.TestConstants.HEALTH_CODE;
+import static org.sagebionetworks.bridge.TestConstants.TEST_STUDY;
+import static org.sagebionetworks.bridge.models.upload.UploadCompletionClient.S3_WORKER;
+import static org.sagebionetworks.bridge.models.upload.UploadStatus.SUCCEEDED;
+import static org.sagebionetworks.bridge.models.upload.UploadStatus.VALIDATION_IN_PROGRESS;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.fail;
 
+import java.net.URL;
+import java.util.Date;
 import java.util.List;
 
+import com.amazonaws.HttpMethod;
+import com.amazonaws.auth.BasicSessionCredentials;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.model.AmazonS3Exception;
+import com.amazonaws.services.s3.model.GeneratePresignedUrlRequest;
+import com.amazonaws.services.s3.model.ObjectMetadata;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.collect.ImmutableList;
 import org.joda.time.DateTime;
+import org.joda.time.DateTimeUtils;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import org.sagebionetworks.bridge.TestConstants;
+import org.sagebionetworks.bridge.TestUtils;
+import org.sagebionetworks.bridge.config.BridgeConfig;
 import org.sagebionetworks.bridge.dao.UploadDao;
+import org.sagebionetworks.bridge.dao.UploadDedupeDao;
 import org.sagebionetworks.bridge.dynamodb.DynamoUpload2;
 import org.sagebionetworks.bridge.exceptions.BadRequestException;
+import org.sagebionetworks.bridge.exceptions.BridgeServiceException;
+import org.sagebionetworks.bridge.exceptions.ConcurrentModificationException;
+import org.sagebionetworks.bridge.exceptions.NotFoundException;
+import org.sagebionetworks.bridge.json.BridgeObjectMapper;
 import org.sagebionetworks.bridge.models.ForwardCursorPagedResourceList;
 import org.sagebionetworks.bridge.models.ResourceList;
+import org.sagebionetworks.bridge.models.accounts.StudyParticipant;
 import org.sagebionetworks.bridge.models.healthdata.HealthDataRecord;
+import org.sagebionetworks.bridge.models.studies.StudyIdentifier;
+import org.sagebionetworks.bridge.models.studies.StudyIdentifierImpl;
 import org.sagebionetworks.bridge.models.upload.Upload;
+import org.sagebionetworks.bridge.models.upload.UploadRequest;
+import org.sagebionetworks.bridge.models.upload.UploadSession;
 import org.sagebionetworks.bridge.models.upload.UploadStatus;
 import org.sagebionetworks.bridge.models.upload.UploadValidationStatus;
 import org.sagebionetworks.bridge.models.upload.UploadView;
+import org.sagebionetworks.bridge.validators.UploadValidator;
 
 @SuppressWarnings("ConstantConditions")
 public class UploadServiceMockTest {
@@ -43,34 +77,72 @@ public class UploadServiceMockTest {
     private static final DateTime START_TIME = DateTime.parse("2016-04-02T10:00:00.000Z");
     private static final DateTime END_TIME = DateTime.parse("2016-04-03T10:00:00.000Z");
     private static final String MOCK_OFFSET_KEY = "mock-offset-key";
+    private static final String UPLOAD_BUCKET_NAME = "upload-bucket";
+    final static DateTime TIMESTAMP = DateTime.now();
+    final static String ORIGINAL_UPLOAD_ID = "anOriginalUploadId";
+    final static String NEW_UPLOAD_ID = "aNewUploadId";
+    final static String RECORD_ID = "aRecordId";
+    final static StudyParticipant PARTICIPANT = new StudyParticipant.Builder().withHealthCode(HEALTH_CODE).build();
 
     @Mock
-    private UploadDao mockDao;
+    HealthDataService mockHealthDataService;
     
     @Mock
-    private HealthDataService mockHealthDataService;
+    Upload mockUpload;
     
     @Mock
-    private Upload mockUpload;
+    UploadValidationStatus mockStatus;
     
     @Mock
-    private UploadValidationStatus mockStatus;
+    HealthDataRecord mockRecord;
     
     @Mock
-    private HealthDataRecord mockRecord;
-    
-    @Mock
-    private Upload mockFailedUpload;
+    Upload mockFailedUpload;
 
-    private UploadService svc;
+    @Mock
+    AmazonS3 mockS3UploadClient;
+    
+    @Mock
+    AmazonS3 mockS3Client;
+    
+    @Mock
+    UploadSessionCredentialsService mockUploadCredentailsService;
+    
+    @Mock
+    UploadValidationService mockUploadValidationService;
+
+    @Mock
+    UploadDedupeDao mockUploadDedupeDao;
+    
+    @Mock
+    UploadDao mockUploadDao;
+    
+    @Mock
+    BridgeConfig mockConfig;
+    
+    @Captor
+    ArgumentCaptor<GeneratePresignedUrlRequest> requestCaptor;
+    
+    @InjectMocks
+    UploadService svc;
     
     @BeforeMethod
     public void before() {
+        DateTimeUtils.setCurrentMillisFixed(TIMESTAMP.getMillis());
         MockitoAnnotations.initMocks(this);
+        svc.setValidator(new UploadValidator());
+        svc.setS3Client(mockS3Client);
+        svc.setS3UploadClient(mockS3UploadClient);
         
-        svc = new UploadService();
-        svc.setUploadDao(mockDao);
-        svc.setHealthDataService(mockHealthDataService);
+        when(mockConfig.getProperty(UploadService.CONFIG_KEY_UPLOAD_BUCKET)).thenReturn(UPLOAD_BUCKET_NAME);
+        when(mockConfig.getList(UploadService.CONFIG_KEY_UPLOAD_DUPE_STUDY_WHITELIST))
+                .thenReturn(ImmutableList.of("whitelisted-study"));
+        svc.setConfig(mockConfig);
+    }
+    
+    @AfterMethod
+    public void after() {
+        DateTimeUtils.setCurrentMillisSystem();
     }
     
     @Test(expectedExceptions = BadRequestException.class)
@@ -90,7 +162,7 @@ public class UploadServiceMockTest {
         // mock upload dao
         DynamoUpload2 mockUpload = new DynamoUpload2();
         mockUpload.setHealthCode("getUpload");
-        when(mockDao.getUpload("test-upload-id")).thenReturn(mockUpload);
+        when(mockUploadDao.getUpload("test-upload-id")).thenReturn(mockUpload);
 
         // execute and validate
         Upload retVal = svc.getUpload("test-upload-id");
@@ -116,7 +188,7 @@ public class UploadServiceMockTest {
         mockUpload.setUploadId("no-record-id");
         mockUpload.setValidationMessageList(ImmutableList.of("getStatus - message"));
 
-        when(mockDao.getUpload("no-record-id")).thenReturn(mockUpload);
+        when(mockUploadDao.getUpload("no-record-id")).thenReturn(mockUpload);
 
         // execute and validate
         UploadValidationStatus status = svc.getUploadValidationStatus("no-record-id");
@@ -138,7 +210,7 @@ public class UploadServiceMockTest {
         mockUpload.setUploadId("with-record-id");
         mockUpload.setValidationMessageList(ImmutableList.of("getStatusWithRecord - message"));
 
-        when(mockDao.getUpload("with-record-id")).thenReturn(mockUpload);
+        when(mockUploadDao.getUpload("with-record-id")).thenReturn(mockUpload);
 
         // mock health data service
         HealthDataRecord dummyRecord = HealthDataRecord.create();
@@ -165,7 +237,7 @@ public class UploadServiceMockTest {
         mockUpload.setUploadId("with-record-id");
         mockUpload.setValidationMessageList(ImmutableList.of("getStatusRecordIdWithNoRecord - message"));
 
-        when(mockDao.getUpload("with-record-id")).thenReturn(mockUpload);
+        when(mockUploadDao.getUpload("with-record-id")).thenReturn(mockUpload);
 
         // mock health data service
         when(mockHealthDataService.getRecordById("missing-record-id")).thenThrow(IllegalArgumentException.class);
@@ -185,7 +257,7 @@ public class UploadServiceMockTest {
         DynamoUpload2 mockUpload = new DynamoUpload2();
         mockUpload.setRecordId("test-record-id");
         mockUpload.setUploadId("with-record-id");
-        when(mockDao.getUpload("with-record-id")).thenReturn(mockUpload);
+        when(mockUploadDao.getUpload("with-record-id")).thenReturn(mockUpload);
 
         // mock health data service
         HealthDataRecord dummyRecord = HealthDataRecord.create();
@@ -217,12 +289,12 @@ public class UploadServiceMockTest {
         
         ForwardCursorPagedResourceList<Upload> pagedListWithoutOffsetKey = new ForwardCursorPagedResourceList<>(results, null)
                 .withRequestParam(ResourceList.PAGE_SIZE, API_MAXIMUM_PAGE_SIZE);
-        doReturn(pagedListWithoutOffsetKey).when(mockDao).getUploads(eq("ABC"), any(DateTime.class), any(DateTime.class), eq(0), eq(null));
+        doReturn(pagedListWithoutOffsetKey).when(mockUploadDao).getUploads(eq("ABC"), any(DateTime.class), any(DateTime.class), eq(0), eq(null));
         
         ForwardCursorPagedResourceList<Upload> pagedList = new ForwardCursorPagedResourceList<>(results, MOCK_OFFSET_KEY)
             .withRequestParam(ResourceList.PAGE_SIZE, API_MAXIMUM_PAGE_SIZE);
-        doReturn(pagedList).when(mockDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_MAXIMUM_PAGE_SIZE, MOCK_OFFSET_KEY);
-        doReturn(pagedList).when(mockDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_DEFAULT_PAGE_SIZE, null);
+        doReturn(pagedList).when(mockUploadDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_MAXIMUM_PAGE_SIZE, MOCK_OFFSET_KEY);
+        doReturn(pagedList).when(mockUploadDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_DEFAULT_PAGE_SIZE, null);
         
         // Mock the record returned from the validation status record
         doReturn("schema-id").when(mockRecord).getSchemaId();
@@ -240,7 +312,7 @@ public class UploadServiceMockTest {
         setupUploadMocks();
         ForwardCursorPagedResourceList<UploadView> returned = svc.getUploads("ABC", START_TIME, END_TIME, 0, null);
         
-        verify(mockDao).getUploads("ABC", START_TIME, END_TIME, 0, null);
+        verify(mockUploadDao).getUploads("ABC", START_TIME, END_TIME, 0, null);
         validateUploadMocks(returned, null);
     }
     
@@ -252,7 +324,7 @@ public class UploadServiceMockTest {
         ForwardCursorPagedResourceList<UploadView> returned = svc.getStudyUploads(TestConstants.TEST_STUDY,
                 START_TIME, END_TIME, API_MAXIMUM_PAGE_SIZE, MOCK_OFFSET_KEY);
         
-        verify(mockDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_MAXIMUM_PAGE_SIZE, MOCK_OFFSET_KEY);
+        verify(mockUploadDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_MAXIMUM_PAGE_SIZE, MOCK_OFFSET_KEY);
         validateUploadMocks(returned, MOCK_OFFSET_KEY);
     }
 
@@ -262,7 +334,7 @@ public class UploadServiceMockTest {
 
         svc.getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, null, null);
 
-        verify(mockDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_DEFAULT_PAGE_SIZE, null);
+        verify(mockUploadDao).getStudyUploads(TestConstants.TEST_STUDY, START_TIME, END_TIME, API_DEFAULT_PAGE_SIZE, null);
     }
 
     private void validateUploadMocks(ForwardCursorPagedResourceList<UploadView> returned, String expectedOffsetKey) {
@@ -305,7 +377,7 @@ public class UploadServiceMockTest {
         setupUploadMocks();
         
         svc.getUploads("ABC", START_TIME, null, 0, null);
-        verify(mockDao).getUploads("ABC", START_TIME, END_TIME, 0, null);
+        verify(mockUploadDao).getUploads("ABC", START_TIME, END_TIME, 0, null);
     }
     
     @Test
@@ -313,7 +385,7 @@ public class UploadServiceMockTest {
         setupUploadMocks();
         
         svc.getUploads("ABC", null, END_TIME, 0, null);
-        verify(mockDao).getUploads("ABC", START_TIME, END_TIME, 0, null);
+        verify(mockUploadDao).getUploads("ABC", START_TIME, END_TIME, 0, null);
     }
     
     @Test
@@ -325,7 +397,7 @@ public class UploadServiceMockTest {
         
         svc.getUploads("ABC", null, null, 0, null);
         
-        verify(mockDao).getUploads(eq("ABC"), start.capture(), end.capture(), eq(0), eq(null));
+        verify(mockUploadDao).getUploads(eq("ABC"), start.capture(), end.capture(), eq(0), eq(null));
         
         DateTime actualStart = start.getValue();
         DateTime actualEnd = end.getValue();
@@ -340,7 +412,7 @@ public class UploadServiceMockTest {
     @Test
     public void deleteUploadsByHealthCodeWorks() {
         svc.deleteUploadsForHealthCode("ABC");
-        verify(mockDao).deleteUploadsForHealthCode("ABC");
+        verify(mockUploadDao).deleteUploadsForHealthCode("ABC");
     }
     
     @Test
@@ -351,6 +423,236 @@ public class UploadServiceMockTest {
         } catch(IllegalArgumentException e) {
             // expected
         }
-        verify(mockDao, never()).deleteUploadsForHealthCode(any());
+        verify(mockUploadDao, never()).deleteUploadsForHealthCode(any());
     }
+    
+    @Test
+    public void createUpload() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        Upload upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(NEW_UPLOAD_ID);
+        
+        when(mockUploadDao.getUpload(ORIGINAL_UPLOAD_ID)).thenReturn(upload);
+        when(mockUploadDao.createUpload(uploadRequest, TEST_STUDY, HEALTH_CODE, null)).thenReturn(upload);
+        when(mockUploadCredentailsService.getSessionCredentials())
+                .thenReturn(new BasicSessionCredentials(null, null, null));
+        when(mockS3UploadClient.generatePresignedUrl(any())).thenReturn(new URL("https://ws.com/some-link"));
+        
+        UploadSession session = svc.createUpload(TEST_STUDY, PARTICIPANT, uploadRequest);
+        assertEquals(session.getId(), NEW_UPLOAD_ID);
+        assertEquals(session.getUrl(), "https://ws.com/some-link");
+        assertEquals(session.getExpires(), TIMESTAMP.getMillis() + UploadService.EXPIRATION);
+        
+        verify(mockS3UploadClient).generatePresignedUrl(requestCaptor.capture());
+        GeneratePresignedUrlRequest request = requestCaptor.getValue();
+        assertEquals(request.getBucketName(), UPLOAD_BUCKET_NAME);
+        assertEquals(request.getContentMd5(), "md5-value");
+        assertEquals(request.getContentType(), "application/binary");
+        assertEquals(request.getExpiration(), new Date(TIMESTAMP.getMillis() + UploadService.EXPIRATION));
+        assertEquals(request.getMethod(), HttpMethod.PUT);
+        assertEquals(request.getRequestParameters().get(SERVER_SIDE_ENCRYPTION), AES_256_SERVER_SIDE_ENCRYPTION);
+    }
+    
+    @Test
+    public void createUploadNoDedupingWhitelistedStudies() throws Exception {
+        StudyIdentifier studyId = new StudyIdentifierImpl("whitelisted-study");
+        
+        UploadRequest uploadRequest = constructUploadRequest();
+        Upload upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(NEW_UPLOAD_ID);
+        
+        when(mockUploadDao.createUpload(uploadRequest, studyId, HEALTH_CODE, null)).thenReturn(upload);
+        when(mockUploadCredentailsService.getSessionCredentials())
+            .thenReturn(new BasicSessionCredentials(null, null, null));
+        when(mockS3UploadClient.generatePresignedUrl(any())).thenReturn(new URL("https://ws.com/some-link"));
+        
+        UploadSession session = svc.createUpload(studyId, PARTICIPANT, uploadRequest);
+        assertEquals(session.getId(), NEW_UPLOAD_ID);
+        assertEquals(session.getUrl(), "https://ws.com/some-link");
+        assertEquals(session.getExpires(), TIMESTAMP.getMillis() + UploadService.EXPIRATION);
+        
+        verify(mockUploadDedupeDao, never()).getDuplicate(any(), any(), any());
+        verify(mockUploadDao, never()).getUpload(any());
+    }
+    
+    @Test
+    public void createUploadDuplicate() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        Upload upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        
+        when(mockUploadDedupeDao.getDuplicate(eq(HEALTH_CODE), eq("md5-value"), any())).thenReturn(ORIGINAL_UPLOAD_ID);
+        when(mockUploadDao.getUpload(ORIGINAL_UPLOAD_ID)).thenReturn(upload);
+        when(mockUploadDao.createUpload(uploadRequest, TEST_STUDY, HEALTH_CODE, ORIGINAL_UPLOAD_ID)).thenReturn(upload);
+        when(mockUploadCredentailsService.getSessionCredentials())
+                .thenReturn(new BasicSessionCredentials(null, null, null));
+        when(mockS3UploadClient.generatePresignedUrl(any())).thenReturn(new URL("https://ws.com/some-link"));
+        
+        UploadSession session = svc.createUpload(TEST_STUDY, PARTICIPANT, uploadRequest);
+        assertEquals(session.getId(), ORIGINAL_UPLOAD_ID);
+        assertEquals(session.getUrl(), "https://ws.com/some-link");
+        assertEquals(session.getExpires(), TIMESTAMP.getMillis() + UploadService.EXPIRATION);
+        
+        verify(mockS3UploadClient).generatePresignedUrl(requestCaptor.capture());
+        GeneratePresignedUrlRequest request = requestCaptor.getValue();
+        assertEquals(request.getBucketName(), UPLOAD_BUCKET_NAME);
+        assertEquals(request.getContentMd5(), "md5-value");
+        assertEquals(request.getContentType(), "application/binary");
+        assertEquals(request.getExpiration(), new Date(TIMESTAMP.getMillis() + UploadService.EXPIRATION));
+        assertEquals(request.getMethod(), HttpMethod.PUT);
+        assertEquals(request.getRequestParameters().get(SERVER_SIDE_ENCRYPTION), AES_256_SERVER_SIDE_ENCRYPTION);
+    }
+
+    @Test
+    public void getUploads() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        Upload upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        
+        DateTime startTime = TIMESTAMP.minusDays(7);
+        DateTime endTime = TIMESTAMP;
+        ForwardCursorPagedResourceList<Upload> uploads = new ForwardCursorPagedResourceList<>(ImmutableList.of(upload),
+                null);
+        when(mockUploadDao.getUploads(HEALTH_CODE, startTime, endTime, 40, "offsetKey")).thenReturn(uploads);
+            
+        ForwardCursorPagedResourceList<UploadView> result = svc.getUploads(HEALTH_CODE, startTime, endTime, 40,
+                "offsetKey");
+        assertEquals(result.getItems().get(0).getUpload(), upload);
+    }
+    
+    @Test
+    public void getUploadsWithDefaultValues() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        Upload upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        
+        ForwardCursorPagedResourceList<Upload> uploads = new ForwardCursorPagedResourceList<>(ImmutableList.of(upload),
+                null);
+        when(mockUploadDao.getUploads(HEALTH_CODE, TIMESTAMP.minusDays(1), TIMESTAMP, API_DEFAULT_PAGE_SIZE, null)).thenReturn(uploads);
+        
+        ForwardCursorPagedResourceList<UploadView> result = svc.getUploads(HEALTH_CODE, null, null, null, null);
+        assertEquals(result.getItems().size(), 1);
+    }
+    
+    @Test
+    public void pollUploadValidationStatusWhenComplete() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        DynamoUpload2 upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        upload.setRecordId(RECORD_ID);
+        upload.setStatus(SUCCEEDED);
+        upload.setValidationMessageList(ImmutableList.of("One validation error"));
+
+        when(mockUploadDao.getUpload(ORIGINAL_UPLOAD_ID)).thenReturn(upload);
+        when(mockHealthDataService.getRecordById(RECORD_ID)).thenReturn(mockRecord);
+        
+        UploadValidationStatus result = svc.pollUploadValidationStatusUntilComplete(ORIGINAL_UPLOAD_ID);
+        assertEquals(result.getId(), upload.getUploadId());
+        assertEquals(result.getRecord(), mockRecord);
+        assertEquals(result.getStatus(), SUCCEEDED);
+        assertEquals(result.getMessageList().size(), 1);
+        assertEquals(result.getMessageList().get(0), "One validation error");
+    }
+    
+    @Test(expectedExceptions = BridgeServiceException.class, 
+            expectedExceptionsMessageRegExp = "Timeout polling validation status for upload anOriginalUploadId")
+    public void pollUploadValidationStatusInProgress() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        DynamoUpload2 upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        upload.setRecordId(RECORD_ID);
+        upload.setStatus(VALIDATION_IN_PROGRESS);
+        upload.setValidationMessageList(ImmutableList.of("One validation error"));
+
+        when(mockUploadDao.getUpload(ORIGINAL_UPLOAD_ID)).thenReturn(upload);
+        when(mockHealthDataService.getRecordById(RECORD_ID)).thenReturn(mockRecord);
+        
+        svc.setPollValidationStatusSleepMillis(10); // speed this up
+        svc.pollUploadValidationStatusUntilComplete(ORIGINAL_UPLOAD_ID);
+    }
+    
+    @Test
+    public void uploadComplete() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        DynamoUpload2 upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        upload.setRecordId(RECORD_ID);
+        
+        ObjectMetadata metadata = new ObjectMetadata();
+        metadata.setSSEAlgorithm(AES_256_SERVER_SIDE_ENCRYPTION);
+        when(mockS3Client.getObjectMetadata(UPLOAD_BUCKET_NAME, ORIGINAL_UPLOAD_ID)).thenReturn(metadata);
+        
+        svc.uploadComplete(TEST_STUDY, S3_WORKER, upload, true);
+        
+        verify(mockUploadDao).uploadComplete(S3_WORKER, upload);
+        verify(mockUploadValidationService).validateUpload(TEST_STUDY, upload);
+    }
+    
+    @Test
+    public void uploadCompleteCannotBeValidated() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        DynamoUpload2 upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setStatus(UploadStatus.SUCCEEDED);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        upload.setRecordId(RECORD_ID);
+
+        svc.uploadComplete(TEST_STUDY, S3_WORKER, upload, false);
+        
+        verify(mockS3Client, never()).getObjectMetadata(any(), any());
+        verify(mockUploadDao, never()).uploadComplete(any(), any());
+        verify(mockUploadValidationService, never()).validateUpload(any(), any());
+    }
+
+    @Test(expectedExceptions = BridgeServiceException.class)
+    public void uploadCompleteObjectMetadataException() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        DynamoUpload2 upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        
+        AmazonS3Exception ex = new AmazonS3Exception("Error message");
+        when(mockS3Client.getObjectMetadata(UPLOAD_BUCKET_NAME, ORIGINAL_UPLOAD_ID)).thenThrow(ex);
+        
+        svc.uploadComplete(TEST_STUDY, S3_WORKER, upload, true);
+    }
+    
+    @Test(expectedExceptions = NotFoundException.class)
+    public void uploadCompleteObjectMetadataNotFound() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        DynamoUpload2 upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        
+        AmazonS3Exception ex = new AmazonS3Exception("Error message");
+        ex.setStatusCode(404);
+        when(mockS3Client.getObjectMetadata(UPLOAD_BUCKET_NAME, ORIGINAL_UPLOAD_ID)).thenThrow(ex);
+        
+        svc.uploadComplete(TEST_STUDY, S3_WORKER, upload, true);
+    }
+    
+    @Test
+    public void uploadCompleteConcurrentModificationException() throws Exception {
+        UploadRequest uploadRequest = constructUploadRequest();
+        DynamoUpload2 upload = new DynamoUpload2(uploadRequest, HEALTH_CODE);
+        upload.setUploadId(ORIGINAL_UPLOAD_ID);
+        upload.setRecordId(RECORD_ID);
+        
+        ObjectMetadata metadata = new ObjectMetadata();
+        metadata.setSSEAlgorithm(AES_256_SERVER_SIDE_ENCRYPTION);
+        when(mockS3Client.getObjectMetadata(UPLOAD_BUCKET_NAME, ORIGINAL_UPLOAD_ID)).thenReturn(metadata);
+        
+        doThrow(new ConcurrentModificationException("error")).when(mockUploadDao).uploadComplete(S3_WORKER, upload);
+        
+        svc.uploadComplete(TEST_STUDY, S3_WORKER, upload, true);
+        
+        verify(mockUploadDao).uploadComplete(S3_WORKER, upload);
+        verify(mockUploadValidationService, never()).validateUpload(TEST_STUDY, upload);
+    }
+    
+    UploadRequest constructUploadRequest() throws Exception {
+        String json = TestUtils.createJson("{"+
+                "'name':'oneUpload',"+
+                "'contentLength':1048,"+ 
+                "'contentMd5': 'md5-value',"+
+                "'contentType':'application/binary'}");
+        JsonNode node = BridgeObjectMapper.get().readTree(json);
+        return UploadRequest.fromJson(node);
+    }    
 }

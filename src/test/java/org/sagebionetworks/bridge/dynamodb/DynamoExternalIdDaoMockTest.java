@@ -448,6 +448,26 @@ public class DynamoExternalIdDaoMockTest {
         assertNull(account.getExternalId());
         assertTrue(account.getAccountSubstudies().isEmpty());
     }
+    
+    @Test
+    public void unassignExternalIdWithoutSubstudySkipsAccountUpdate() {
+        externalId.setHealthCode(HEALTH_CODE);
+        when(mapper.load(any())).thenReturn(externalId);
+
+        AccountSubstudy acctSubstudy = AccountSubstudy.create(TEST_STUDY_IDENTIFIER, SUBSTUDY_ID, USER_ID);
+        acctSubstudy.setExternalId(ID);
+
+        Account account = Account.create();
+        account.setStudyId(TEST_STUDY_IDENTIFIER);
+        account.setHealthCode(HEALTH_CODE);
+        account.setId(USER_ID);
+        account.setExternalId(ID);
+        account.setAccountSubstudies(null); // this would throw an error if executed
+
+        dao.unassignExternalId(account, ID);
+
+        assertNull(account.getExternalId());
+    }
 
     @Test
     public void pagingWithFilterShorterThanKeyWorks() {

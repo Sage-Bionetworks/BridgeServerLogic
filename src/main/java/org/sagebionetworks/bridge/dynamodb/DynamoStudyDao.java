@@ -16,7 +16,8 @@ import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapperConfig.SaveB
 import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBScanExpression;
 import com.amazonaws.services.dynamodbv2.model.ConditionalCheckFailedException;
 import com.google.common.collect.ImmutableSet;
-import org.sagebionetworks.bridge.config.BridgeConfigFactory;
+
+import org.sagebionetworks.bridge.config.BridgeConfig;
 import org.sagebionetworks.bridge.dao.StudyDao;
 import org.sagebionetworks.bridge.exceptions.ConcurrentModificationException;
 import org.sagebionetworks.bridge.exceptions.EntityAlreadyExistsException;
@@ -29,17 +30,23 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class DynamoStudyDao implements StudyDao {
-    private static final Set<String> STUDY_WHITE_LIST = ImmutableSet.copyOf(
-            BridgeConfigFactory.getConfig().getPropertyAsList("study.whitelist"));
+    static final String STUDY_WHITELIST_PROPERTY = "study.whitelist";
+    
+    private Set<String> studyWhitelist;
 
     private DynamoDBMapper mapper;
 
     @Autowired
-    public void setDynamoDbClient(AmazonDynamoDB client, DynamoNamingHelper dynamoNamingHelper) {
+    final void setDynamoDbClient(AmazonDynamoDB client, DynamoNamingHelper dynamoNamingHelper) {
         DynamoDBMapperConfig mapperConfig = new DynamoDBMapperConfig.Builder().withSaveBehavior(SaveBehavior.UPDATE)
                 .withConsistentReads(ConsistentReads.CONSISTENT)
                 .withTableNameOverride(dynamoNamingHelper.getTableNameOverride(DynamoStudy.class)).build();
         mapper = new DynamoDBMapper(client, mapperConfig);
+    }
+    
+    @Autowired
+    final void setBridgeConfig(BridgeConfig config) {
+        studyWhitelist = ImmutableSet.copyOf(config.getPropertyAsList(STUDY_WHITELIST_PROPERTY));
     }
 
     @Override
@@ -101,7 +108,7 @@ public class DynamoStudyDao implements StudyDao {
         checkNotNull(study, Validate.CANNOT_BE_BLANK, "study");
 
         String studyId = study.getIdentifier();
-        if (STUDY_WHITE_LIST.contains(studyId)) {
+        if (studyWhitelist.contains(studyId)) {
             throw new UnauthorizedException(studyId + " is protected by whitelist.");
         }
 
@@ -112,7 +119,7 @@ public class DynamoStudyDao implements StudyDao {
     public void deactivateStudy(String studyId) {
         checkNotNull(studyId, Validate.CANNOT_BE_BLANK, "study");
 
-        if (STUDY_WHITE_LIST.contains(studyId)) {
+        if (studyWhitelist.contains(studyId)) {
             throw new UnauthorizedException(studyId + " is protected by whitelist.");
         }
 

@@ -62,7 +62,7 @@ public class UploadService {
 
     private static final Logger logger = LoggerFactory.getLogger(UploadService.class);
 
-    private static final long EXPIRATION = 24 * 60 * 60 * 1000; // 24 hours
+    static final long EXPIRATION = 24 * 60 * 60 * 1000; // 24 hours
     
     // package-scoped to be available in unit tests
     static final String CONFIG_KEY_UPLOAD_BUCKET = "upload.bucket";
